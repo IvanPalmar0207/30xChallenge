@@ -208,6 +208,8 @@ class AuditEvent(models.Model):
         VENDOR_ACTIVATED = "vendor_activated", "Vendor activated"
         VENDOR_DEACTIVATED = "vendor_deactivated", "Vendor deactivated"
         INVOICE_CREATED = "invoice_created", "Invoice created"
+        INVITATION_ISSUED = "invitation_issued", "Invitation issued"
+        PASSWORD_SET = "password_set", "Password set"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     actor = models.ForeignKey(
@@ -244,3 +246,35 @@ class AuditEvent(models.Model):
 
     def delete(self, *args, **kwargs):
         raise ValueError("Audit events are append-only and cannot be deleted.")
+
+
+class PasswordSetupToken(models.Model):
+    """One-time, expiring token that authorizes setting an account's initial
+    password.
+
+    Only the SHA-256 hash of the raw token is stored; the raw token is shown
+    exactly once (in the invite response) and relayed out-of-band. An
+    ordinary DRF access token is never accepted by the set-password flow, so
+    a leaked or filtered access token cannot take over an account that has no
+    password yet (Slice 5 spec S4).
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="password_setup_tokens",
+    )
+    token_hash = models.CharField(max_length=64)
+    expires_at = models.DateTimeField()
+    used_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["token_hash"]),
+        ]
+
+    def __str__(self):
+        return f"setup token for {self.user}"

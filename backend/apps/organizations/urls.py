@@ -9,6 +9,7 @@ from .views import (
     OrganizationViewSet,
     UserActivationView,
     UserCreateView,
+    UserInviteView,
     VendorActivateView,
     VendorDeactivateView,
     VendorDetailView,
@@ -41,6 +42,13 @@ urlpatterns = [
         "organizations/<uuid:organization_pk>/users/<int:pk>/",
         UserActivationView.as_view(),
         name="organization-user-detail",
+    ),
+    # One-time password-setup invitation (Slice 5). FINANCE_ADMIN only; the
+    # raw token is returned once and only its hash is stored.
+    path(
+        "organizations/<uuid:organization_pk>/users/<int:pk>/invite/",
+        UserInviteView.as_view(),
+        name="organization-user-invite",
     ),
     # Vendor management (Slice 3). Reads: any active member of the active
     # organization; mutations: FINANCE_ADMIN only. Activation/deactivation

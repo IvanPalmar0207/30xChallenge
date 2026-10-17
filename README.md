@@ -128,13 +128,17 @@ to any ACTIVE member of the ACTIVE organization; vendor creation, updates,
 and activation/deactivation require `FINANCE_ADMIN` (anyone else gets the
 same 404). Invoice reads are open to any active member; invoice creation
 requires `FINANCE_ADMIN` or `OPERATOR` (anyone else gets the same 404).
-Login and token issuance are not implemented yet.
+Login is available at `/api/v1/auth/login/` (see Authentication below).
 
 | Method | Path | Behavior |
 | --- | --- | --- |
 | GET | `/api/v1/organizations/` | Organizations the authenticated user can access |
 | GET | `/api/v1/organizations/{id}/` | One accessible organization (uniform 404 otherwise) |
 | GET | `/api/v1/auth/me/` | Safe profile + active memberships with roles |
+| POST | `/api/v1/auth/login/` | Exchange email + password for a DRF token (uniform 401, throttled) |
+| POST | `/api/v1/auth/logout/` | Revoke the current token (or flush the session) |
+| POST | `/api/v1/auth/set-password/` | Set the initial password with a one-time invitation token |
+| POST | `/api/v1/organizations/{id}/users/{user_id}/invite/` | Issue a one-time password-setup token (FINANCE_ADMIN only) |
 | GET | `/api/v1/organizations/{id}/memberships/` | Memberships of the organization (FINANCE_ADMIN only) |
 | POST | `/api/v1/organizations/{id}/memberships/` | Create a membership for an existing user (FINANCE_ADMIN only) |
 | GET / PATCH | `/api/v1/organizations/{id}/memberships/{membership_id}/` | Read; change role or active state (FINANCE_ADMIN only) |
@@ -191,6 +195,39 @@ states (approval, blocking, escalation) arrive in later slices.
 - **No financial claims** — extraction, policy evaluation, approval,
   blocking, escalation, and payments are out of scope for this slice; the
   `received` status carries no financial effect yet.
+
+## Authentication
+
+Phase 2, slice 5. Accounts are created by an administrator with an unusable
+password; the administrator then issues a one-time invitation token that the
+user redeems to set their own initial password.
+
+- **Login** — `POST /api/v1/auth/login/` with `{email, password}` returns
+  `{token, user}` where `user` is a safe identity payload (no password, no
+  staff/superuser flags). Wrong credentials and inactive accounts answer the
+  same uniform 401 (`Invalid email or password.`), so the endpoint never
+  discloses whether an email exists (no user enumeration). The email is
+  normalized (strip + lowercase).
+- **Invitation** — `POST /api/v1/organizations/{id}/users/{user_id}/invite/`
+  (FINANCE_ADMIN only) returns a one-time setup token exactly once; only its
+  SHA-256 hash is stored, it expires after 72 hours, and issuing a new one
+  invalidates previous unused tokens. The admin relays the raw token
+  out-of-band (in production this would be emailed).
+- **Set password** — `POST /api/v1/auth/set-password/` with
+  `{setup_token, password}` sets the initial password and marks the token
+  used. An ordinary or filtered DRF access token is **never** accepted here,
+  so a leaked access token cannot take over an account that has no password
+  yet. Passwords are validated with Django's password validators.
+- **Logout and revocation** — `POST /api/v1/auth/logout/` revokes the
+  current token (or flushes the session for session-authenticated requests).
+  DRF tokens do **not** expire automatically (documented limitation);
+  deactivating an account invalidates its tokens immediately (401 on next
+  use).
+- **Throttling** — login and set-password are throttled at 30 attempts per
+  minute per IP (DRF built-in throttling, no new dependency).
+- **Audit** — `invitation_issued` (admin, org context) and `password_set`
+  (the user, no org context) events are recorded with safe metadata; raw
+  tokens, hashes, and passwords are never logged.
 
 ## Vendors
 
@@ -282,20 +319,29 @@ organization; creation, updates, and activation/deactivation require an ACTIVE
   reads for any active member, creation for FINANCE_ADMIN/OPERATOR (uniform
   404), transactional `invoice_created` audit events, read-only invoice admin
   surface.
-  149 integration tests in total (25 slice 1 + 47 slice 2 + 40 slice 3 + 37 slice 4).
+- (Phase 2, slice 5) secure login: `POST /api/v1/auth/login/` (uniform 401,
+  no user enumeration, throttled), `POST /api/v1/auth/logout/` (revokes the
+  current token), a one-time invitation flow
+  (`.../users/{id}/invite/` + `POST /api/v1/auth/set-password/`) that stores
+  only a SHA-256 hash of the setup token and never accepts an access token,
+  and `password_set` / `invitation_issued` audit events.
+  176 integration tests in total (25 slice 1 + 47 slice 2 + 40 slice 3 + 37 slice 4 + 27 slice 5).
 
-**Not implemented yet (planned phases)** — public login/registration and
-password setup or reset flows (created accounts hold an unusable password);
-an audit read/export API (records exist but only the admin can browse them);
-invoice policy evaluation, approval, and payment workflows; AI invoice
-extraction; the deterministic policy
-engine; the approval workflow; frontend administration UI. No placeholder
+**Not implemented yet (planned phases)** — public self-registration and
+password reset flows (initial passwords are set via the invitation flow;
+forgotten-password reset is deferred); an audit read/export API (records
+exist but only the admin can browse them); invoice policy evaluation,
+approval, and payment workflows; AI invoice
+extraction; the deterministic policy engine; the approval workflow; frontend
+administration UI. No placeholder
 business logic has been added; domain apps land under `backend/apps/` and
 feature modules under `frontend/src/app/features/` as they are built.
 
 **Known limitations** — the only confirmed database is local SQLite
-(PostgreSQL is pre-configured but untested); created accounts cannot log in
-until a password-setup flow exists; `FINANCE_ADMIN` cannot be granted through
+(PostgreSQL is pre-configured but untested); DRF tokens do not expire
+automatically (logout or account deactivation is the revocation path);
+forgotten-password reset and self-registration are deferred; `FINANCE_ADMIN`
+cannot be granted through
 the API (no delegation rule); audit append-only is enforced at the
 application level, not by the database; the Django admin is the default
 scaffold.

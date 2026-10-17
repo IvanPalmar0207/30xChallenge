@@ -150,6 +150,13 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+    # Anonymous and authenticated throttle rates (Slice 5). The login and
+    # set-password endpoints use a dedicated 30/min anonymous throttle to
+    # slow brute force without a new dependency.
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": "30/min",
+        "user": "120/min",
+    },
 }
 
 # ---------------------------------------------------------------------------

@@ -8,18 +8,29 @@ rule violations inside the organization return 403. Every change and its audit
 record commit in one transaction.
 """
 
+import hashlib
+import secrets
 import uuid
+from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 
 from rest_framework import generics, status, viewsets
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from .models import AuditEvent, Invoice, Organization, OrganizationMembership, Vendor
+from .models import (
+    AuditEvent,
+    Invoice,
+    Organization,
+    OrganizationMembership,
+    PasswordSetupToken,
+    Vendor,
+)
 from .permissions import (
     IsActiveOrganizationFinanceAdmin,
     IsActiveOrganizationInvoiceCreator,
@@ -324,6 +335,61 @@ class UserActivationView(generics.UpdateAPIView):
                 target_id=target.id,
                 metadata={"is_active": is_active_after},
             )
+
+
+# Lifetime of a one-time password-setup token (Slice 5).
+SETUP_TOKEN_TTL_HOURS = 72
+
+
+class UserInviteView(generics.GenericAPIView):
+    """Issue a one-time password-setup token for an account of the URL org
+    (admin only).
+
+    The raw token is returned exactly once; only its SHA-256 hash is stored.
+    Previous unused tokens for the same user are invalidated, so there is at
+    most one active invitation per account. The admin relays the token
+    out-of-band (in production this would be emailed). An ordinary access
+    token is never accepted by the set-password flow, so a leaked access
+    token cannot take over an account that has no password yet.
+    """
+
+    permission_classes = [IsAuthenticated, IsActiveOrganizationFinanceAdmin]
+
+    def get_queryset(self):
+        return User.objects.filter(
+            memberships__organization_id=self.kwargs["organization_pk"]
+        )
+
+    def get_organization(self):
+        return get_object_or_404(Organization, pk=self.kwargs["organization_pk"])
+
+    def post(self, request, *args, **kwargs):
+        user = self.get_object()
+        if user.is_superuser:
+            raise PermissionDenied(
+                "Global superuser accounts cannot be invited through "
+                "organization endpoints."
+            )
+        PasswordSetupToken.objects.filter(user=user, used_at__isnull=True).delete()
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+        expires_at = timezone.now() + timedelta(hours=SETUP_TOKEN_TTL_HOURS)
+        with transaction.atomic():
+            PasswordSetupToken.objects.create(
+                user=user, token_hash=token_hash, expires_at=expires_at
+            )
+            _audit(
+                actor=request.user,
+                organization=self.get_organization(),
+                action=AuditEvent.Action.INVITATION_ISSUED,
+                target_type="user",
+                target_id=user.id,
+                metadata={"expires_at": expires_at.isoformat()},
+            )
+        return Response(
+            {"setup_token": raw_token, "expires_at": expires_at.isoformat()},
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class VendorListCreateView(generics.ListCreateAPIView):

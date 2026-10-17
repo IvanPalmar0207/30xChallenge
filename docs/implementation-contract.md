@@ -96,3 +96,4 @@ multi-currency treasury features, and full enterprise workflow tooling.
 | 2026-10-17 | Phase 2, slice 2: account lifecycle and membership administration (admin-created users, memberships, role assignment, activation, transactional audit trail). Invariants unchanged. |
 | 2026-10-17 | Phase 2, slice 3: organization-scoped vendor management (Vendor model, reads for active members, FINANCE_ADMIN-only mutations, explicit activation/deactivation, transactional audit trail). Invariants unchanged. |
 | 2026-10-17 | Phase 2, slice 4: organization-scoped invoice registration and querying (Invoice model, reads for active members, FINANCE_ADMIN/OPERATOR creation, server-assigned status, transactional audit trail). Invariants unchanged. |
+| 2026-10-17 | Phase 2, slice 5: secure login (DRF token login with uniform 401 and throttling, logout revocation, one-time invitation flow for initial password setup, password_set/invitation_issued audit events). Invariants unchanged. |
