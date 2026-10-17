@@ -9,6 +9,7 @@ from .models import (
     OrganizationMembership,
     OrganizationRole,
     Vendor,
+    Invoice,
 )
 
 User = get_user_model()
@@ -241,3 +242,142 @@ class VendorUpdateSerializer(serializers.ModelSerializer):
                     "A vendor with this tax identifier already exists in this organization."
                 )
         return attrs
+
+
+# ---------------------------------------------------------------------------
+# Invoices (Slice 4)
+# ---------------------------------------------------------------------------
+
+
+# Curated, explicit list of supported ISO 4217 currency codes. No other
+# codes are accepted; the list is documented in the README and can be extended
+# deliberately in a later slice.
+SUPPORTED_CURRENCIES = [
+    "USD",
+    "EUR",
+    "GBP",
+    "COP",
+    "MXN",
+    "ARS",
+    "BRL",
+    "PEN",
+    "CLP",
+    "CHF",
+    "CAD",
+    "JPY",
+]
+
+
+def _normalize_invoice_number(value):
+    """Conservative normalization: strip + uppercase.
+
+    Consistent with the tax-identifier convention: the normalized value is
+    what gets stored, so the database uniqueness constraint operates on the
+    stored value while normalization itself is an application-level
+    guarantee (documented limitation).
+    """
+
+    normalized = value.strip().upper()
+    if not normalized:
+        raise serializers.ValidationError("Invoice number must not be blank.")
+    if len(normalized) > 100:
+        raise serializers.ValidationError(
+            "Invoice number must be at most 100 characters."
+        )
+    return normalized
+
+
+class InvoiceVendorSerializer(serializers.ModelSerializer):
+    """Read-only minimal vendor reference shown inside invoice payloads."""
+
+    class Meta:
+        model = Vendor
+        fields = ["id", "legal_name", "tax_id"]
+
+
+class InvoiceSerializer(serializers.ModelSerializer):
+    vendor = InvoiceVendorSerializer(read_only=True)
+
+    class Meta:
+        model = Invoice
+        fields = [
+            "id",
+            "vendor",
+            "invoice_number",
+            "issue_date",
+            "due_date",
+            "amount",
+            "currency",
+            "description",
+            "status",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class InvoiceCreateSerializer(serializers.Serializer):
+    """Create an invoice in the URL's organization.
+
+    Writable allowlist: vendor, invoice_number, issue_date, due_date, amount,
+    currency, description. Organization ownership comes from the URL; status
+    is always `received` server-side; internal/audit fields are not writable.
+    """
+
+    vendor = serializers.PrimaryKeyRelatedField(queryset=Vendor.objects.all())
+    invoice_number = serializers.CharField()
+    issue_date = serializers.DateField()
+    due_date = serializers.DateField(required=False, allow_null=True)
+    amount = serializers.DecimalField(max_digits=14, decimal_places=2)
+    currency = serializers.CharField(max_length=3)
+    description = serializers.CharField(
+        required=False, allow_blank=True, max_length=500
+    )
+
+    def validate_invoice_number(self, value):
+        return _normalize_invoice_number(value)
+
+    def validate_currency(self, value):
+        currency = value.strip().upper()
+        if currency not in SUPPORTED_CURRENCIES:
+            raise serializers.ValidationError(
+                f"Unsupported currency. Supported codes: {', '.join(SUPPORTED_CURRENCIES)}."
+            )
+        return currency
+
+    def validate_amount(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Amount must be greater than zero.")
+        return value
+
+    def validate(self, attrs):
+        organization = self.context.get("organization")
+        vendor = attrs.get("vendor")
+        if organization is not None and vendor is not None:
+            # Defense in depth: the view already answers 404 for vendors that
+            # do not exist or belong to another organization.
+            if vendor.organization_id != organization.id:
+                raise serializers.ValidationError(
+                    {"vendor": "This vendor does not belong to this organization."}
+                )
+            if vendor.status != Vendor.Status.ACTIVE:
+                raise serializers.ValidationError({"vendor": "Vendor is inactive."})
+            if Invoice.objects.filter(
+                organization=organization,
+                vendor=vendor,
+                invoice_number=attrs["invoice_number"],
+            ).exists():
+                raise serializers.ValidationError(
+                    "An invoice with this number already exists for this vendor in this organization."
+                )
+        issue_date = attrs.get("issue_date")
+        due_date = attrs.get("due_date")
+        if issue_date is not None and due_date is not None and due_date < issue_date:
+            raise serializers.ValidationError(
+                {"due_date": "Due date must not be earlier than the issue date."}
+            )
+        return attrs
+
+    def create(self, validated_data):
+        organization = validated_data.pop("organization")
+        return Invoice.objects.create(**validated_data, organization=organization)

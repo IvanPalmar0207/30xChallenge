@@ -129,6 +129,59 @@ class Vendor(models.Model):
         return f"{self.legal_name} @ {self.organization}"
 
 
+class Invoice(models.Model):
+    """A supplier invoice owned by exactly one organization.
+
+    Registered securely for later slices (extraction, policy evaluation,
+    human review). The initial status is always `received`; lifecycle states
+    arrive in later slices. Money is stored as Decimal, never float. The
+    invoice number is normalized (strip + uppercase) before storage and
+    duplicate checks; the database uniqueness constraint acts on the stored
+    value, so normalization is an application-level guarantee (documented
+    limitation, consistent with Vendor.tax_id).
+    """
+
+    class Status(models.TextChoices):
+        RECEIVED = "received"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name="invoices",
+    )
+    vendor = models.ForeignKey(
+        Vendor,
+        on_delete=models.PROTECT,
+        related_name="invoices",
+    )
+    invoice_number = models.CharField(max_length=100)
+    issue_date = models.DateField()
+    due_date = models.DateField(null=True, blank=True)
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    currency = models.CharField(max_length=3)
+    description = models.TextField(blank=True, max_length=500)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.RECEIVED,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "vendor", "invoice_number"],
+                name="unique_invoice_number_per_vendor_in_organization",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.invoice_number} @ {self.organization}"
+
+
 class AuditEvent(models.Model):
     """Append-only audit record for security-relevant administrative changes.
 
@@ -154,6 +207,7 @@ class AuditEvent(models.Model):
         VENDOR_UPDATED = "vendor_updated", "Vendor updated"
         VENDOR_ACTIVATED = "vendor_activated", "Vendor activated"
         VENDOR_DEACTIVATED = "vendor_deactivated", "Vendor deactivated"
+        INVOICE_CREATED = "invoice_created", "Invoice created"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     actor = models.ForeignKey(

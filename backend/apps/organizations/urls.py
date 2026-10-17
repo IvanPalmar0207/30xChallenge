@@ -2,6 +2,8 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
+    InvoiceDetailView,
+    InvoiceListCreateView,
     MembershipDetailView,
     MembershipListCreateView,
     OrganizationViewSet,
@@ -62,5 +64,18 @@ urlpatterns = [
         "organizations/<uuid:organization_pk>/vendors/<uuid:pk>/deactivate/",
         VendorDeactivateView.as_view(),
         name="organization-vendor-deactivate",
+    ),
+    # Invoice management (Slice 4). Reads: any active member of the active
+    # organization; creation: FINANCE_ADMIN or OPERATOR only. No update or
+    # delete in this slice; status is server-assigned.
+    path(
+        "organizations/<uuid:organization_pk>/invoices/",
+        InvoiceListCreateView.as_view(),
+        name="organization-invoice-list",
+    ),
+    path(
+        "organizations/<uuid:organization_pk>/invoices/<uuid:pk>/",
+        InvoiceDetailView.as_view(),
+        name="organization-invoice-detail",
     ),
 ]

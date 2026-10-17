@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import AuditEvent, Organization, OrganizationMembership, Vendor
+from .models import AuditEvent, Invoice, Organization, OrganizationMembership, Vendor
 
 
 @admin.register(Organization)
@@ -35,6 +35,52 @@ class VendorAdmin(admin.ModelAdmin):
         "organization",
         "legal_name",
         "tax_id",
+        "status",
+        "created_at",
+        "updated_at",
+    ]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(Invoice)
+class InvoiceAdmin(admin.ModelAdmin):
+    """Read-only invoice surface.
+
+    Invoices are managed exclusively through the audited API endpoints; the
+    admin is registered read-only so no alternate, un-audited mutation path
+    exists (Slice 4 spec S6).
+    """
+
+    list_display = (
+        "invoice_number",
+        "organization",
+        "vendor",
+        "amount",
+        "currency",
+        "status",
+        "issue_date",
+    )
+    list_filter = ("status", "currency", "organization")
+    search_fields = ("invoice_number", "vendor__legal_name", "organization__name")
+    ordering = ("-created_at",)
+    readonly_fields = [
+        "id",
+        "organization",
+        "vendor",
+        "invoice_number",
+        "issue_date",
+        "due_date",
+        "amount",
+        "currency",
+        "description",
         "status",
         "created_at",
         "updated_at",

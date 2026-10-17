@@ -94,3 +94,38 @@ class IsActiveOrganizationMemberInUrl(permissions.BasePermission):
         if not is_member:
             raise NotFound("Organization not found.")
         return True
+
+
+class IsActiveOrganizationInvoiceCreator(permissions.BasePermission):
+    """Require an ACTIVE FINANCE_ADMIN or OPERATOR membership in the ACTIVE
+    organization named by the URL's `organization_pk`.
+
+    Invoice registration is a business operation open to operators and
+    finance admins; approvers and auditors never gain it by implication.
+    Unknown organizations, inactive organizations, inactive memberships, and
+    unauthorized roles all resolve to the same 404 (HidingByNotExisting,
+    consistent with the other organization-scoped permissions).
+    """
+
+    message = "You do not have permission to register invoices in this organization."
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        organization_pk = view.kwargs.get("organization_pk")
+        if not organization_pk:
+            return False
+        is_creator = OrganizationMembership.objects.filter(
+            user=user,
+            organization_id=organization_pk,
+            organization__status=Organization.Status.ACTIVE,
+            is_active=True,
+            role__in=[
+                OrganizationRole.FINANCE_ADMIN,
+                OrganizationRole.OPERATOR,
+            ],
+        ).exists()
+        if not is_creator:
+            raise NotFound("Organization not found.")
+        return True

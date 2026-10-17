@@ -8,6 +8,8 @@ rule violations inside the organization return 403. Every change and its audit
 record commit in one transaction.
 """
 
+import uuid
+
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
@@ -17,13 +19,16 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from .models import AuditEvent, Organization, OrganizationMembership, Vendor
+from .models import AuditEvent, Invoice, Organization, OrganizationMembership, Vendor
 from .permissions import (
     IsActiveOrganizationFinanceAdmin,
+    IsActiveOrganizationInvoiceCreator,
     IsActiveOrganizationMember,
     IsActiveOrganizationMemberInUrl,
 )
 from .serializers import (
+    InvoiceCreateSerializer,
+    InvoiceSerializer,
     MembershipCreateSerializer,
     MembershipSerializer,
     MembershipUpdateSerializer,
@@ -509,3 +514,105 @@ class VendorDeactivateView(generics.GenericAPIView):
         vendor = self.get_object()
         _change_vendor_status(request, vendor, active=False)
         return Response(VendorSerializer(vendor).data, status=status.HTTP_200_OK)
+
+
+class InvoiceListCreateView(generics.ListCreateAPIView):
+    """List (any active member) or create (FINANCE_ADMIN/OPERATOR) invoices
+    of the URL organization.
+
+    The organization is resolved from the URL and never from the request
+    body. Vendors that do not exist or belong to another organization answer
+    the same uniform 404 (no existence disclosure); an inactive vendor is a
+    controlled 400 validation error.
+    """
+
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [IsAuthenticated(), IsActiveOrganizationInvoiceCreator()]
+        return [IsAuthenticated(), IsActiveOrganizationMemberInUrl()]
+
+    def get_queryset(self):
+        return (
+            Invoice.objects.filter(organization_id=self.kwargs["organization_pk"])
+            .select_related("vendor")
+            .order_by("-created_at")
+        )
+
+    def get_serializer_class(self):
+        if self.request.method == "GET":
+            return InvoiceSerializer
+        return InvoiceCreateSerializer
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["organization"] = self.get_organization()
+        return context
+
+    def get_organization(self):
+        return get_object_or_404(Organization, pk=self.kwargs["organization_pk"])
+
+    def create(self, request, *args, **kwargs):
+        # Uniform 404 for vendors that do not exist or belong to another
+        # organization (HidingByNotExisting). A malformed vendor pk falls
+        # through to serializer validation, which answers a controlled 400.
+        vendor_pk = request.data.get("vendor")
+        if vendor_pk is not None:
+            try:
+                vendor_uuid = uuid.UUID(str(vendor_pk))
+            except (ValueError, TypeError):
+                vendor_uuid = None
+            if vendor_uuid is not None:
+                get_object_or_404(
+                    Vendor,
+                    pk=vendor_uuid,
+                    organization_id=self.kwargs["organization_pk"],
+                )
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        response_serializer = InvoiceSerializer(
+            serializer.instance, context=self.get_serializer_context()
+        )
+        return Response(
+            response_serializer.data,
+            status=status.HTTP_201_CREATED,
+            headers=headers,
+        )
+
+    def perform_create(self, serializer):
+        organization = self.get_organization()
+        try:
+            with transaction.atomic():
+                invoice = serializer.save(organization=organization)
+                _audit(
+                    actor=self.request.user,
+                    organization=organization,
+                    action=AuditEvent.Action.INVOICE_CREATED,
+                    target_type="invoice",
+                    target_id=invoice.id,
+                    metadata={
+                        "invoice_number": invoice.invoice_number,
+                        "vendor": str(invoice.vendor_id),
+                        "amount": str(invoice.amount),
+                        "currency": invoice.currency,
+                    },
+                )
+        except IntegrityError:
+            # Race backstop: validate() already rejects duplicates; this
+            # covers concurrent creation of the same invoice number.
+            raise ValidationError(
+                "An invoice with this number already exists for this vendor in this organization."
+            )
+
+
+class InvoiceDetailView(generics.RetrieveAPIView):
+    """Read one invoice of the URL organization (any active member)."""
+
+    permission_classes = [IsAuthenticated, IsActiveOrganizationMemberInUrl]
+    serializer_class = InvoiceSerializer
+
+    def get_queryset(self):
+        return Invoice.objects.filter(
+            organization_id=self.kwargs["organization_pk"]
+        ).select_related("vendor")

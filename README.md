@@ -126,7 +126,9 @@ membership, modifying global-superuser memberships, or granting
 `APPROVER` / `AUDITOR` are grantable). Vendor reads (list/retrieve) are open
 to any ACTIVE member of the ACTIVE organization; vendor creation, updates,
 and activation/deactivation require `FINANCE_ADMIN` (anyone else gets the
-same 404). Login and token issuance are not implemented yet.
+same 404). Invoice reads are open to any active member; invoice creation
+requires `FINANCE_ADMIN` or `OPERATOR` (anyone else gets the same 404).
+Login and token issuance are not implemented yet.
 
 | Method | Path | Behavior |
 | --- | --- | --- |
@@ -144,6 +146,51 @@ same 404). Login and token issuance are not implemented yet.
 | PATCH | `/api/v1/organizations/{id}/vendors/{vendor_id}/` | Update legal name or tax identifier (FINANCE_ADMIN only; never status) |
 | POST | `/api/v1/organizations/{id}/vendors/{vendor_id}/activate/` | Explicitly activate a vendor (FINANCE_ADMIN only) |
 | POST | `/api/v1/organizations/{id}/vendors/{vendor_id}/deactivate/` | Explicitly deactivate a vendor, preserving the record (FINANCE_ADMIN only) |
+| GET | `/api/v1/organizations/{id}/invoices/` | List invoices of the organization (any active member) |
+| POST | `/api/v1/organizations/{id}/invoices/` | Register an invoice (FINANCE_ADMIN or OPERATOR only) |
+| GET | `/api/v1/organizations/{id}/invoices/{invoice_id}/` | One invoice of the organization (any active member) |
+
+## Invoices
+
+Organization-scoped invoice registration and querying (Phase 2, slice 4). An
+invoice belongs to exactly one organization (resolved from the URL, never
+from the request body) and is linked to exactly one vendor of that
+organization. Reads are open to any ACTIVE member of the ACTIVE organization;
+creation requires an ACTIVE `FINANCE_ADMIN` or `OPERATOR` membership (uniform
+404 for everyone else). There is no update or delete in this slice: the
+initial status is always `received`, assigned server-side, and lifecycle
+states (approval, blocking, escalation) arrive in later slices.
+
+- **Invoice number** — normalized with `strip()` + `upper()` only (consistent
+  with the tax-identifier convention). The normalized value is what gets
+  stored, so the database uniqueness constraint operates on the stored value
+  while normalization itself is an application-level guarantee (documented
+  limitation).
+- **Uniqueness** — one invoice number per (organization, vendor) at the
+  database level: the same number from a different vendor in the same
+  organization, or from the same vendor in a different organization, is
+  allowed. Duplicate attempts answer a controlled 400.
+- **Money and currency** — `amount` is a `Decimal` strictly greater than
+  zero, max 14 digits / 2 decimals (never `float`). `currency` must be one of
+  the curated supported codes: USD, EUR, GBP, COP, MXN, ARS, BRL, PEN, CLP,
+  CHF, CAD, JPY (normalized to uppercase; the list is documented and can be
+  extended deliberately).
+- **Dates** — `issue_date` is required; `due_date` is optional and must not
+  be earlier than the issue date.
+- **Vendor rules** — the vendor must belong to the URL organization: a
+  vendor that does not exist or belongs to another organization answers the
+  same uniform 404; an inactive vendor answers a controlled 400
+  (`Vendor is inactive.`).
+- **Audit** — every successful creation records an `invoice_created` event
+  with actor, organization, target, timestamp, and safe metadata
+  (`invoice_number`, `vendor`, `amount`, `currency` — never the full request
+  body, no secrets). The creation and its audit event commit in one
+  transaction; a failed audit write rolls back the creation. The Django
+  admin surface for invoices is read-only, so no un-audited mutation path
+  exists.
+- **No financial claims** — extraction, policy evaluation, approval,
+  blocking, escalation, and payments are out of scope for this slice; the
+  `received` status carries no financial effect yet.
 
 ## Vendors
 
@@ -227,12 +274,21 @@ organization; creation, updates, and activation/deactivation require an ACTIVE
   `activate/` / `deactivate/` operations (the ordinary PATCH never touches
   status); transactional audit events (`vendor_created`, `vendor_updated`,
   `vendor_activated`, `vendor_deactivated`); read-only vendor admin surface.
-  112 integration tests in total (25 slice 1 + 47 slice 2 + 40 slice 3).
+- (Phase 2, slice 4) organization-scoped invoice registration and querying:
+  `Invoice` model owned by one organization and linked to one vendor of that
+  organization (PROTECT FK), database-level (organization, vendor, invoice
+  number) uniqueness with conservative strip+uppercase normalization, Decimal
+  amount with curated currency codes, server-assigned `received` status,
+  reads for any active member, creation for FINANCE_ADMIN/OPERATOR (uniform
+  404), transactional `invoice_created` audit events, read-only invoice admin
+  surface.
+  149 integration tests in total (25 slice 1 + 47 slice 2 + 40 slice 3 + 37 slice 4).
 
 **Not implemented yet (planned phases)** — public login/registration and
 password setup or reset flows (created accounts hold an unusable password);
 an audit read/export API (records exist but only the admin can browse them);
-invoice models; AI invoice extraction; the deterministic policy
+invoice policy evaluation, approval, and payment workflows; AI invoice
+extraction; the deterministic policy
 engine; the approval workflow; frontend administration UI. No placeholder
 business logic has been added; domain apps land under `backend/apps/` and
 feature modules under `frontend/src/app/features/` as they are built.
