@@ -1,0 +1,10 @@
+# PayBlood backend — base runtime dependencies (pinned)
+# Selected for Python 3.14 (Django 5.2 LTS does not support Python 3.14).
+Django==6.1.2
+djangorestframework==3.18.3
+django-cors-headers==4.9.0
+django-environ==0.14.0
+
+# PostgreSQL driver — kept from day one so DATABASE_URL can switch to
+# postgres:// without a new install. SQLite remains the local default.
+psycopg[binary]==3.3.6

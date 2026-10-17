@@ -1,0 +1,57 @@
+# =============================================================================
+# PayBlood — root ignore rules
+# =============================================================================
+# Intent: secrets, local state, generated artifacts and tool caches never enter
+# the repository. Tracks only the explicitly named template (.env.example).
+
+# ---- Environment files and secrets -----------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+
+# ---- Python / Django --------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+pip-wheel-metadata/
+*.sqlite3
+db.sqlite3
+logs/
+*.log
+media/
+uploads/
+staticfiles/
+coverage/
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Node / Angular ---------------------------------------------------------
+node_modules/
+dist/
+.angular/
+.vite/
+npm-debug.log*
+yarn-error.log*
+
+# ---- IDE / OS artifacts -----------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ---- Agent tooling cache (local pi/gentle-ai skill registry) ----------------
+.atl/

@@ -1,0 +1,1 @@
+"""PayBlood organizations domain app."""

@@ -1,0 +1,3 @@
+# PayBlood backend — development dependencies
+# Add dev-only tools (e.g. coverage, pytest) here as they become needed.
+-r base.txt
