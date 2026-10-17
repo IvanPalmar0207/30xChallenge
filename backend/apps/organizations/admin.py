@@ -1,6 +1,14 @@
 from django.contrib import admin
 
-from .models import AuditEvent, Invoice, Organization, OrganizationMembership, Vendor
+from .models import (
+    AuditEvent,
+    Invoice,
+    Organization,
+    OrganizationMembership,
+    Policy,
+    PolicyDecision,
+    Vendor,
+)
 
 
 @admin.register(Organization)
@@ -84,6 +92,77 @@ class InvoiceAdmin(admin.ModelAdmin):
         "status",
         "created_at",
         "updated_at",
+    ]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(Policy)
+class PolicyAdmin(admin.ModelAdmin):
+    """Read-only policy surface. Policies are immutable versions managed
+    exclusively through the audited API (Slice 6 spec S2)."""
+
+    list_display = ("organization", "version", "is_active", "created_at")
+    list_filter = ("is_active", "organization")
+    ordering = ("-version",)
+    readonly_fields = [
+        "id",
+        "organization",
+        "version",
+        "is_active",
+        "allowed_currencies",
+        "max_amount",
+        "escalation_threshold",
+        "require_due_date",
+        "require_description",
+        "created_at",
+        "updated_at",
+    ]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(PolicyDecision)
+class PolicyDecisionAdmin(admin.ModelAdmin):
+    """Read-only view of persisted policy decisions (audit surface)."""
+
+    list_display = (
+        "created_at",
+        "organization",
+        "invoice",
+        "result",
+        "reason_code",
+        "policy_version",
+    )
+    list_filter = ("result", "organization")
+    search_fields = ("invoice__invoice_number", "reason_code")
+    ordering = ("-created_at",)
+    readonly_fields = [
+        "id",
+        "organization",
+        "invoice",
+        "result",
+        "reason_code",
+        "reason_detail",
+        "policy_id",
+        "policy_version",
+        "rules_snapshot",
+        "evaluated_by",
+        "created_at",
     ]
 
     def has_add_permission(self, request):

@@ -10,6 +10,8 @@ from .models import (
     OrganizationRole,
     Vendor,
     Invoice,
+    Policy,
+    PolicyDecision,
 )
 
 User = get_user_model()
@@ -381,3 +383,124 @@ class InvoiceCreateSerializer(serializers.Serializer):
     def create(self, validated_data):
         organization = validated_data.pop("organization")
         return Invoice.objects.create(**validated_data, organization=organization)
+
+
+# ---------------------------------------------------------------------------
+# Policy engine (Slice 6)
+# ---------------------------------------------------------------------------
+
+
+class PolicySerializer(serializers.ModelSerializer):
+    """Read representation of a policy version (immutable)."""
+
+    class Meta:
+        model = Policy
+        fields = [
+            "id",
+            "version",
+            "is_active",
+            "allowed_currencies",
+            "max_amount",
+            "escalation_threshold",
+            "require_due_date",
+            "require_description",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class PolicyCreateSerializer(serializers.Serializer):
+    """Create a new policy version for the URL organization.
+
+    Rule semantics (documented): `allowed_currencies=[]` means no currency
+    restriction; `max_amount` is a hard cap (exceeding it blocks);
+    `escalation_threshold` escalates amounts above it (if not blocked
+    first); `require_due_date` / `require_description` escalate invoices
+    with missing data. When both limits are set, `escalation_threshold`
+    must not exceed `max_amount`.
+    """
+
+    allowed_currencies = serializers.ListField(
+        child=serializers.CharField(max_length=3),
+        required=False,
+        default=list,
+    )
+    max_amount = serializers.DecimalField(
+        max_digits=14, decimal_places=2, required=False, allow_null=True
+    )
+    escalation_threshold = serializers.DecimalField(
+        max_digits=14, decimal_places=2, required=False, allow_null=True
+    )
+    require_due_date = serializers.BooleanField(required=False, default=False)
+    require_description = serializers.BooleanField(required=False, default=False)
+
+    def validate_allowed_currencies(self, value):
+        normalized = []
+        for code in value:
+            currency = code.strip().upper()
+            if currency not in SUPPORTED_CURRENCIES:
+                raise serializers.ValidationError(
+                    f"Unsupported currency: {code}. Supported codes: {', '.join(SUPPORTED_CURRENCIES)}."
+                )
+            normalized.append(currency)
+        return normalized
+
+    def validate_max_amount(self, value):
+        if value is not None and value <= 0:
+            raise serializers.ValidationError(
+                "max_amount must be greater than zero."
+            )
+        return value
+
+    def validate_escalation_threshold(self, value):
+        if value is not None and value <= 0:
+            raise serializers.ValidationError(
+                "escalation_threshold must be greater than zero."
+            )
+        return value
+
+    def validate(self, attrs):
+        max_amount = attrs.get("max_amount")
+        threshold = attrs.get("escalation_threshold")
+        if max_amount is not None and threshold is not None and threshold > max_amount:
+            raise serializers.ValidationError(
+                "escalation_threshold must not exceed max_amount: amounts above "
+                "max_amount are blocked first."
+            )
+        return attrs
+
+    def create(self, validated_data):
+        organization = validated_data.pop("organization")
+        Policy.objects.filter(organization=organization, is_active=True).update(
+            is_active=False
+        )
+        last = (
+            Policy.objects.filter(organization=organization)
+            .order_by("-version")
+            .first()
+        )
+        version = (last.version + 1) if last else 1
+        return Policy.objects.create(
+            organization=organization, version=version, **validated_data
+        )
+
+
+class PolicyDecisionSerializer(serializers.ModelSerializer):
+    """Read representation of a persisted policy decision."""
+
+    class Meta:
+        model = PolicyDecision
+        fields = [
+            "id",
+            "invoice",
+            "result",
+            "reason_code",
+            "reason_detail",
+            "policy_id",
+            "policy_version",
+            "rules_snapshot",
+            "evaluated_by",
+            "created_at",
+        ]
+        read_only_fields = fields

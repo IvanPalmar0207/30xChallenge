@@ -143,6 +143,9 @@ class Invoice(models.Model):
 
     class Status(models.TextChoices):
         RECEIVED = "received"
+        APPROVED = "approved"
+        BLOCKED = "blocked"
+        ESCALATED = "escalated"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     organization = models.ForeignKey(
@@ -182,6 +185,105 @@ class Invoice(models.Model):
         return f"{self.invoice_number} @ {self.organization}"
 
 
+class Policy(models.Model):
+    """An explicit, versioned, immutable organization policy for invoice
+    evaluation.
+
+    Creating a new policy deactivates the previous active one (one active
+    policy per organization); historical versions are never modified. Rule
+    semantics (documented): `allowed_currencies=[]` means no currency
+    restriction; `max_amount` is a hard cap (exceeding it blocks);
+    `escalation_threshold` escalates amounts above it (if not blocked
+    first); `require_due_date` / `require_description` escalate invoices with
+    missing data. When both limits are set, `escalation_threshold` must not
+    exceed `max_amount` (validated at creation).
+    """
+
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name="policies",
+    )
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    version = models.PositiveIntegerField()
+    is_active = models.BooleanField(default=True)
+    allowed_currencies = models.JSONField(default=list, blank=True)
+    max_amount = models.DecimalField(
+        max_digits=14, decimal_places=2, null=True, blank=True
+    )
+    escalation_threshold = models.DecimalField(
+        max_digits=14, decimal_places=2, null=True, blank=True
+    )
+    require_due_date = models.BooleanField(default=False)
+    require_description = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-version"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "version"],
+                name="unique_policy_version_per_organization",
+            ),
+        ]
+
+    def __str__(self):
+        return f"Policy v{self.version} @ {self.organization}"
+
+
+class PolicyDecision(models.Model):
+    """The persisted, auditable result of evaluating one invoice against the
+    active policy.
+
+    One decision per invoice (database-level backstop against duplicate
+    evaluations). The `rules_snapshot` makes the decision self-contained:
+    later policy changes never alter recorded decisions. The requester never
+    chooses the outcome — the deterministic engine does.
+    """
+
+    class Result(models.TextChoices):
+        APPROVED = "approved"
+        BLOCKED = "blocked"
+        ESCALATED = "escalated"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name="policy_decisions",
+    )
+    invoice = models.ForeignKey(
+        Invoice,
+        on_delete=models.PROTECT,
+        related_name="decisions",
+    )
+    result = models.CharField(max_length=20, choices=Result.choices)
+    reason_code = models.CharField(max_length=50)
+    reason_detail = models.TextField(blank=True)
+    policy_id = models.UUIDField(null=True, blank=True)
+    policy_version = models.PositiveIntegerField(null=True, blank=True)
+    rules_snapshot = models.JSONField(default=dict, blank=True)
+    evaluated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="+",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["invoice"],
+                name="unique_policy_decision_per_invoice",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.result} ({self.reason_code}) for {self.invoice}"
+
+
 class AuditEvent(models.Model):
     """Append-only audit record for security-relevant administrative changes.
 
@@ -210,6 +312,8 @@ class AuditEvent(models.Model):
         INVOICE_CREATED = "invoice_created", "Invoice created"
         INVITATION_ISSUED = "invitation_issued", "Invitation issued"
         PASSWORD_SET = "password_set", "Password set"
+        INVOICE_EVALUATED = "invoice_evaluated", "Invoice evaluated"
+        POLICY_CREATED = "policy_created", "Policy created"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     actor = models.ForeignKey(

@@ -2,11 +2,15 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
+    InvoiceDecisionView,
     InvoiceDetailView,
+    InvoiceEvaluateView,
     InvoiceListCreateView,
     MembershipDetailView,
     MembershipListCreateView,
     OrganizationViewSet,
+    PolicyDetailView,
+    PolicyListCreateView,
     UserActivationView,
     UserCreateView,
     UserInviteView,
@@ -85,5 +89,28 @@ urlpatterns = [
         "organizations/<uuid:organization_pk>/invoices/<uuid:pk>/",
         InvoiceDetailView.as_view(),
         name="organization-invoice-detail",
+    ),
+    # Deterministic policy engine (Slice 6). Policy reads: any active
+    # member; policy creation: FINANCE_ADMIN only (immutable versions).
+    # Evaluation: FINANCE_ADMIN/OPERATOR trigger, the engine decides.
+    path(
+        "organizations/<uuid:organization_pk>/policies/",
+        PolicyListCreateView.as_view(),
+        name="organization-policy-list",
+    ),
+    path(
+        "organizations/<uuid:organization_pk>/policies/<uuid:pk>/",
+        PolicyDetailView.as_view(),
+        name="organization-policy-detail",
+    ),
+    path(
+        "organizations/<uuid:organization_pk>/invoices/<uuid:pk>/evaluate/",
+        InvoiceEvaluateView.as_view(),
+        name="organization-invoice-evaluate",
+    ),
+    path(
+        "organizations/<uuid:organization_pk>/invoices/<uuid:pk>/decision/",
+        InvoiceDecisionView.as_view(),
+        name="organization-invoice-decision",
     ),
 ]

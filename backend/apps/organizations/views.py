@@ -9,6 +9,7 @@ record commit in one transaction.
 """
 
 import hashlib
+import logging
 import secrets
 import uuid
 from datetime import timedelta
@@ -19,7 +20,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
 from rest_framework import generics, status, viewsets
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
@@ -29,6 +30,8 @@ from .models import (
     Organization,
     OrganizationMembership,
     PasswordSetupToken,
+    Policy,
+    PolicyDecision,
     Vendor,
 )
 from .permissions import (
@@ -44,12 +47,25 @@ from .serializers import (
     MembershipSerializer,
     MembershipUpdateSerializer,
     OrganizationSerializer,
+    PolicyCreateSerializer,
+    PolicyDecisionSerializer,
+    PolicySerializer,
     UserActivationSerializer,
     UserCreateSerializer,
     VendorCreateSerializer,
     VendorSerializer,
     VendorUpdateSerializer,
 )
+
+logger = logging.getLogger(__name__)
+
+
+class Conflict(APIException):
+    """HTTP 409 for state-machine conflicts (e.g. repeated evaluation)."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "Conflict."
+    default_code = "conflict"
 
 User = get_user_model()
 
@@ -682,3 +698,256 @@ class InvoiceDetailView(generics.RetrieveAPIView):
         return Invoice.objects.filter(
             organization_id=self.kwargs["organization_pk"]
         ).select_related("vendor")
+
+
+# ---------------------------------------------------------------------------
+# Deterministic policy engine (Slice 6)
+# ---------------------------------------------------------------------------
+
+
+def evaluate_invoice(invoice, policy):
+    """Deterministic evaluation of one invoice against a policy.
+
+    Precedence is `blocked -> escalated -> approved` with strict
+    comparisons: `amount > max_amount` blocks; `amount >
+    escalation_threshold` escalates only if not blocked before. Missing
+    data escalates (cannot be decided safely). No active policy escalates
+    (`no_active_policy`) — an invoice is never approved without a valid,
+    applicable policy. Returns (result, reason_code, reason_detail).
+    """
+
+    if policy is None:
+        return (
+            PolicyDecision.Result.ESCALATED,
+            "no_active_policy",
+            "No active policy is configured for this organization.",
+        )
+    if policy.allowed_currencies and invoice.currency not in policy.allowed_currencies:
+        return (
+            PolicyDecision.Result.BLOCKED,
+            "currency_not_allowed",
+            f"Currency {invoice.currency} is not allowed by the active policy.",
+        )
+    if policy.max_amount is not None and invoice.amount > policy.max_amount:
+        return (
+            PolicyDecision.Result.BLOCKED,
+            "amount_exceeds_max",
+            f"Amount {invoice.amount} exceeds the policy maximum {policy.max_amount}.",
+        )
+    if (
+        policy.escalation_threshold is not None
+        and invoice.amount > policy.escalation_threshold
+    ):
+        return (
+            PolicyDecision.Result.ESCALATED,
+            "amount_exceeds_escalation_threshold",
+            f"Amount {invoice.amount} exceeds the escalation threshold "
+            f"{policy.escalation_threshold}.",
+        )
+    if policy.require_due_date and invoice.due_date is None:
+        return (
+            PolicyDecision.Result.ESCALATED,
+            "due_date_missing",
+            "The policy requires a due date.",
+        )
+    if policy.require_description and not (invoice.description or "").strip():
+        return (
+            PolicyDecision.Result.ESCALATED,
+            "description_missing",
+            "The policy requires a description.",
+        )
+    return (
+        PolicyDecision.Result.APPROVED,
+        "policy_ok",
+        "The invoice complies with the active policy.",
+    )
+
+
+def _policy_snapshot(policy):
+    """Unambiguous snapshot of the effective rules at evaluation time."""
+
+    if policy is None:
+        return {}
+    return {
+        "version": policy.version,
+        "allowed_currencies": list(policy.allowed_currencies),
+        "max_amount": (
+            str(policy.max_amount) if policy.max_amount is not None else None
+        ),
+        "escalation_threshold": (
+            str(policy.escalation_threshold)
+            if policy.escalation_threshold is not None
+            else None
+        ),
+        "require_due_date": policy.require_due_date,
+        "require_description": policy.require_description,
+    }
+
+
+class PolicyListCreateView(generics.ListCreateAPIView):
+    """List (any active member) or create a new policy version
+    (FINANCE_ADMIN) for the URL organization."""
+
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [IsAuthenticated(), IsActiveOrganizationFinanceAdmin()]
+        return [IsAuthenticated(), IsActiveOrganizationMemberInUrl()]
+
+    def get_queryset(self):
+        return Policy.objects.filter(
+            organization_id=self.kwargs["organization_pk"]
+        ).order_by("-version")
+
+    def get_serializer_class(self):
+        if self.request.method == "GET":
+            return PolicySerializer
+        return PolicyCreateSerializer
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["organization"] = self.get_organization()
+        return context
+
+    def get_organization(self):
+        return get_object_or_404(Organization, pk=self.kwargs["organization_pk"])
+
+    def perform_create(self, serializer):
+        organization = self.get_organization()
+        with transaction.atomic():
+            policy = serializer.save(organization=organization)
+            _audit(
+                actor=self.request.user,
+                organization=organization,
+                action=AuditEvent.Action.POLICY_CREATED,
+                target_type="policy",
+                target_id=policy.id,
+                metadata={
+                    "version": policy.version,
+                    "is_active": policy.is_active,
+                },
+            )
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        response_serializer = PolicySerializer(
+            serializer.instance, context=self.get_serializer_context()
+        )
+        return Response(
+            response_serializer.data,
+            status=status.HTTP_201_CREATED,
+            headers=headers,
+        )
+
+
+class PolicyDetailView(generics.RetrieveAPIView):
+    """Read one policy version of the URL organization (any active member)."""
+
+    permission_classes = [IsAuthenticated, IsActiveOrganizationMemberInUrl]
+    serializer_class = PolicySerializer
+
+    def get_queryset(self):
+        return Policy.objects.filter(
+            organization_id=self.kwargs["organization_pk"]
+        )
+
+
+class InvoiceEvaluateView(generics.GenericAPIView):
+    """Evaluate one invoice against the organization's active policy.
+
+    The engine decides deterministically; the requester never chooses the
+    outcome. The decision, the invoice status transition, and the audit
+    event commit in one transaction; any failure rolls back everything.
+    Concurrency: the invoice row is locked with select_for_update() where
+    the database supports it (PostgreSQL); the unique constraint on
+    PolicyDecision.invoice is the universal backstop. SQLite concurrency is
+    not claimed as validated.
+    """
+
+    permission_classes = [IsAuthenticated, IsActiveOrganizationInvoiceCreator]
+
+    def get_organization(self):
+        return get_object_or_404(Organization, pk=self.kwargs["organization_pk"])
+
+    def post(self, request, *args, **kwargs):
+        organization = self.get_organization()
+        invoice = get_object_or_404(
+            Invoice.objects.select_for_update(),
+            pk=self.kwargs["pk"],
+            organization_id=organization.id,
+        )
+        if invoice.status != Invoice.Status.RECEIVED:
+            raise Conflict("This invoice has already been evaluated.")
+        policy = (
+            Policy.objects.filter(organization=organization, is_active=True)
+            .order_by("-version")
+            .first()
+        )
+        try:
+            result, reason_code, reason_detail = evaluate_invoice(invoice, policy)
+        except Exception:
+            # Fail safe: never approve on an internal error, never leave a
+            # partial decision or state change, never expose internals.
+            logger.exception("Invoice evaluation failed unexpectedly")
+            return Response(
+                {"detail": "Internal server error."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        rules_snapshot = _policy_snapshot(policy)
+        with transaction.atomic():
+            invoice.status = result
+            invoice.save(update_fields=["status", "updated_at"])
+            decision = PolicyDecision.objects.create(
+                organization=organization,
+                invoice=invoice,
+                result=result,
+                reason_code=reason_code,
+                reason_detail=reason_detail,
+                policy_id=policy.id if policy else None,
+                policy_version=policy.version if policy else None,
+                rules_snapshot=rules_snapshot,
+                evaluated_by=request.user,
+            )
+            _audit(
+                actor=request.user,
+                organization=organization,
+                action=AuditEvent.Action.INVOICE_EVALUATED,
+                target_type="invoice",
+                target_id=invoice.id,
+                metadata={
+                    "result": result,
+                    "reason_code": reason_code,
+                    "policy_version": policy.version if policy else None,
+                    "decision_id": str(decision.id),
+                },
+            )
+        return Response(
+            {
+                "invoice_id": str(invoice.id),
+                "result": result,
+                "reason_code": reason_code,
+                "reason_detail": reason_detail,
+                "policy_version": policy.version if policy else None,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class InvoiceDecisionView(generics.RetrieveAPIView):
+    """Read the policy decision for one invoice (any active member)."""
+
+    permission_classes = [IsAuthenticated, IsActiveOrganizationMemberInUrl]
+    serializer_class = PolicyDecisionSerializer
+    # The URL names the INVOICE (invoices/<uuid:pk>/decision/), so the
+    # generic lookup must match PolicyDecision.invoice_id, not the decision's
+    # own primary key: without this, every read answers empty (the invoice
+    # UUID never equals the decision UUID).
+    lookup_field = "invoice_id"
+    lookup_url_kwarg = "pk"
+
+    def get_queryset(self):
+        return PolicyDecision.objects.filter(
+            organization_id=self.kwargs["organization_pk"],
+        )

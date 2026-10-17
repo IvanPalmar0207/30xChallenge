@@ -153,6 +153,11 @@ Login is available at `/api/v1/auth/login/` (see Authentication below).
 | GET | `/api/v1/organizations/{id}/invoices/` | List invoices of the organization (any active member) |
 | POST | `/api/v1/organizations/{id}/invoices/` | Register an invoice (FINANCE_ADMIN or OPERATOR only) |
 | GET | `/api/v1/organizations/{id}/invoices/{invoice_id}/` | One invoice of the organization (any active member) |
+| GET | `/api/v1/organizations/{id}/policies/` | List policy versions (any active member) |
+| POST | `/api/v1/organizations/{id}/policies/` | Create a new policy version, deactivating the previous one (FINANCE_ADMIN only) |
+| GET | `/api/v1/organizations/{id}/policies/{policy_id}/` | One policy version (any active member) |
+| POST | `/api/v1/organizations/{id}/invoices/{invoice_id}/evaluate/` | Evaluate an invoice against the active policy (FINANCE_ADMIN or OPERATOR trigger; the engine decides) |
+| GET | `/api/v1/organizations/{id}/invoices/{invoice_id}/decision/` | Read the persisted decision for one invoice (any active member) |
 
 ## Invoices
 
@@ -228,6 +233,58 @@ user redeems to set their own initial password.
 - **Audit** — `invitation_issued` (admin, org context) and `password_set`
   (the user, no org context) events are recorded with safe metadata; raw
   tokens, hashes, and passwords are never logged.
+
+## Policy engine
+
+Phase 2, slice 6. A versioned, immutable policy and a deterministic engine
+decide whether an invoice is `approved` (simulation only), `blocked` (mandatory
+rule violation), or `escalated` (human review / cannot decide safely). The
+engine is the only decision authority: the requester never chooses the outcome,
+and no endpoint accepts a decision field from the client.
+
+- **Policy model** — each organization has at most one ACTIVE policy; creating
+a new version deactivates the previous one inside the same transaction. Every
+version is immutable once created: historical versions cannot be edited or
+deleted through the API (read-only admin surface too).
+- **Rules** — `allowed_currencies` restricts the invoice currency;
+`max_amount` is a hard cap; `escalation_threshold` sends amounts above it to
+human review; `require_due_date` / `require_description` escalate invoices with
+missing data. Semantics are explicit: `allowed_currencies=[]` means **no
+currency restriction** (documented so an ambiguous empty configuration can
+never approve by accident). When both limits are set, `escalation_threshold`
+must not exceed `max_amount` (coherence checked at creation, else 400).
+- **Decision order (precedence)** — `blocked → escalated → approved`:
+currency not allowed or `amount > max_amount` blocks; otherwise
+`amount > escalation_threshold` or a required field missing escalates; only
+when every rule passes does the invoice get `approved`. Comparisons are strict
+(`>`): an amount exactly equal to a limit does not exceed it.
+- **No active policy = escalated** — an invoice is never approved without a
+valid, applicable policy (`no_active_policy`).
+- **Decision record** — one persisted `PolicyDecision` per invoice (database
+uniqueness constraint), with result, reason code, reason detail, policy id and
+version, and an unambiguous `rules_snapshot` of the effective rules at
+evaluation time: later policy changes never alter recorded decisions. The
+requester never chooses the outcome.
+- **State machine & transactions** — evaluation requires `status == received`
+(any other state answers `409 Conflict`). The decision, the invoice status
+transition, and the `invoice_evaluated` audit event commit in one transaction;
+any failure rolls back everything and the API answers a generic `500` with no
+internal details. Internal errors never approve and never leave partial state.
+- **Concurrency** — the invoice row is locked with `select_for_update()` where
+the database supports it (PostgreSQL), and the one-decision-per-invoice unique
+constraint is the universal backstop. SQLite concurrency is not claimed as
+validated (documented limitation).
+- **Permissions** — policy reads and decision reads for any active member;
+policy creation FINANCE_ADMIN only; evaluation is triggered by
+FINANCE_ADMIN/OPERATOR (an operator never becomes a human approver). Unknown
+organizations, inactive organizations, and unauthorized roles all resolve to
+the same uniform 404.
+- **Audit** — `invoice_evaluated` (result, reason_code, policy_version,
+decision_id — no secrets, no full body) and `policy_created` (version,
+is_active) events, recorded transactionally and append-only at the
+application level.
+- **No financial claims** — this is a simulation decision, not a payment:
+no payments, budgets, or purchase orders exist.
 
 ## Vendors
 
@@ -325,20 +382,30 @@ organization; creation, updates, and activation/deactivation require an ACTIVE
   (`.../users/{id}/invite/` + `POST /api/v1/auth/set-password/`) that stores
   only a SHA-256 hash of the setup token and never accepts an access token,
   and `password_set` / `invitation_issued` audit events.
-  176 integration tests in total (25 slice 1 + 47 slice 2 + 40 slice 3 + 37 slice 4 + 27 slice 5).
+- (Phase 2, slice 6) deterministic invoice policy engine: versioned immutable
+  `Policy` (one active per organization), `evaluate_invoice` with strict
+  comparisons and `blocked → escalated → approved` precedence, escalated
+  `no_active_policy` fail-safe, persisted one-per-invoice `PolicyDecision`
+  with an unambiguous rules snapshot, received → approved/blocked/escalated
+  state machine with 409 on repeated evaluation, transactional
+  decision + status + `invoice_evaluated`/`policy_created` audit events,
+  `select_for_update()` + unique constraint against concurrency, and policy/
+  decision reads for any active member with FINANCE_ADMIN-only policy
+  creation.
+  210 integration tests in total (25 slice 1 + 47 slice 2 + 40 slice 3 + 37 slice 4 + 27 slice 5 + 34 slice 6).
 
 **Not implemented yet (planned phases)** — public self-registration and
 password reset flows (initial passwords are set via the invitation flow;
 forgotten-password reset is deferred); an audit read/export API (records
-exist but only the admin can browse them); invoice policy evaluation,
-approval, and payment workflows; AI invoice
-extraction; the deterministic policy engine; the approval workflow; frontend
-administration UI. No placeholder
+exist but only the admin can browse them); the human approval workflow on
+top of `escalated` invoices, payments, and budgets/POs; AI invoice
+extraction; the frontend administration UI. No placeholder
 business logic has been added; domain apps land under `backend/apps/` and
 feature modules under `frontend/src/app/features/` as they are built.
 
 **Known limitations** — the only confirmed database is local SQLite
-(PostgreSQL is pre-configured but untested); DRF tokens do not expire
+(PostgreSQL is pre-configured but untested; `select_for_update()` evaluation
+concurrency is therefore not validated on the confirmed database); DRF tokens do not expire
 automatically (logout or account deactivation is the revocation path);
 forgotten-password reset and self-registration are deferred; `FINANCE_ADMIN`
 cannot be granted through
