@@ -17,8 +17,12 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from .models import AuditEvent, Organization, OrganizationMembership
-from .permissions import IsActiveOrganizationFinanceAdmin, IsActiveOrganizationMember
+from .models import AuditEvent, Organization, OrganizationMembership, Vendor
+from .permissions import (
+    IsActiveOrganizationFinanceAdmin,
+    IsActiveOrganizationMember,
+    IsActiveOrganizationMemberInUrl,
+)
 from .serializers import (
     MembershipCreateSerializer,
     MembershipSerializer,
@@ -26,6 +30,9 @@ from .serializers import (
     OrganizationSerializer,
     UserActivationSerializer,
     UserCreateSerializer,
+    VendorCreateSerializer,
+    VendorSerializer,
+    VendorUpdateSerializer,
 )
 
 User = get_user_model()
@@ -312,3 +319,193 @@ class UserActivationView(generics.UpdateAPIView):
                 target_id=target.id,
                 metadata={"is_active": is_active_after},
             )
+
+
+class VendorListCreateView(generics.ListCreateAPIView):
+    """List (any active member) or create (FINANCE_ADMIN) vendors of the URL
+    organization.
+
+    Reads include inactive vendors so they remain distinguishable from
+    nonexistent ones; mutations are reserved for FINANCE_ADMIN. The
+    organization is resolved from the URL and never from the request body.
+    """
+
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [IsAuthenticated(), IsActiveOrganizationFinanceAdmin()]
+        return [IsAuthenticated(), IsActiveOrganizationMemberInUrl()]
+
+    def get_queryset(self):
+        return (
+            Vendor.objects.filter(organization_id=self.kwargs["organization_pk"])
+            .select_related("organization")
+            .order_by("legal_name")
+        )
+
+    def get_serializer_class(self):
+        if self.request.method == "GET":
+            return VendorSerializer
+        return VendorCreateSerializer
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["organization"] = self.get_organization()
+        return context
+
+    def get_organization(self):
+        return get_object_or_404(Organization, pk=self.kwargs["organization_pk"])
+
+    def perform_create(self, serializer):
+        organization = self.get_organization()
+        try:
+            with transaction.atomic():
+                vendor = serializer.save(organization=organization)
+                _audit(
+                    actor=self.request.user,
+                    organization=organization,
+                    action=AuditEvent.Action.VENDOR_CREATED,
+                    target_type="vendor",
+                    target_id=vendor.id,
+                    metadata={"legal_name": vendor.legal_name},
+                )
+        except IntegrityError:
+            # Race backstop: validate() already rejects duplicates; this
+            # covers concurrent creation of the same normalized tax_id.
+            raise ValidationError(
+                "A vendor with this tax identifier already exists in this organization."
+            )
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        response_serializer = VendorSerializer(
+            serializer.instance, context=self.get_serializer_context()
+        )
+        return Response(
+            response_serializer.data,
+            status=status.HTTP_201_CREATED,
+            headers=headers,
+        )
+
+
+class VendorDetailView(generics.RetrieveUpdateAPIView):
+    """Read (any active member) or update business data (FINANCE_ADMIN) of
+    one vendor.
+
+    `status` is deliberately not writable here: an ordinary update can never
+    silently reactivate an inactive vendor. Activation and deactivation are
+    explicit, separately authorized operations.
+    """
+
+    def get_permissions(self):
+        if self.request.method in ("PUT", "PATCH"):
+            return [IsAuthenticated(), IsActiveOrganizationFinanceAdmin()]
+        return [IsAuthenticated(), IsActiveOrganizationMemberInUrl()]
+
+    def get_queryset(self):
+        return Vendor.objects.filter(
+            organization_id=self.kwargs["organization_pk"]
+        ).select_related("organization")
+
+    def get_serializer_class(self):
+        if self.request.method == "GET":
+            return VendorSerializer
+        return VendorUpdateSerializer
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["organization"] = self.get_organization()
+        return context
+
+    def get_organization(self):
+        return get_object_or_404(Organization, pk=self.kwargs["organization_pk"])
+
+    def perform_update(self, serializer):
+        vendor = serializer.instance
+        changes = {}
+        for field in ("legal_name", "tax_id"):
+            if field in serializer.validated_data:
+                new_value = serializer.validated_data[field]
+                if getattr(vendor, field) != new_value:
+                    changes[field] = {"from": getattr(vendor, field), "to": new_value}
+        if not changes:
+            # No business-data change: nothing to persist, nothing to audit.
+            return
+        try:
+            with transaction.atomic():
+                serializer.save()
+                _audit(
+                    actor=self.request.user,
+                    organization=vendor.organization,
+                    action=AuditEvent.Action.VENDOR_UPDATED,
+                    target_type="vendor",
+                    target_id=vendor.id,
+                    metadata={"changes": changes},
+                )
+        except IntegrityError:
+            raise ValidationError(
+                "A vendor with this tax identifier already exists in this organization."
+            )
+
+
+def _change_vendor_status(request, vendor, active):
+    """Explicit activation/deactivation with audit, in one transaction.
+
+    Idempotent: setting the same status is a no-op with no audit event. The
+    record is never deleted; deactivation preserves its historical identity.
+    """
+    organization = vendor.organization
+    before = vendor.status
+    after = Vendor.Status.ACTIVE if active else Vendor.Status.INACTIVE
+    if before == after:
+        return
+    with transaction.atomic():
+        vendor.status = after
+        vendor.save(update_fields=["status", "updated_at"])
+        _audit(
+            actor=request.user,
+            organization=organization,
+            action=(
+                AuditEvent.Action.VENDOR_ACTIVATED
+                if active
+                else AuditEvent.Action.VENDOR_DEACTIVATED
+            ),
+            target_type="vendor",
+            target_id=vendor.id,
+            metadata={"status_before": before, "status_after": after},
+        )
+
+
+class VendorActivateView(generics.GenericAPIView):
+    """Explicitly activate a vendor (FINANCE_ADMIN only)."""
+
+    permission_classes = [IsAuthenticated, IsActiveOrganizationFinanceAdmin]
+
+    def get_queryset(self):
+        return Vendor.objects.filter(
+            organization_id=self.kwargs["organization_pk"]
+        ).select_related("organization")
+
+    def post(self, request, *args, **kwargs):
+        vendor = self.get_object()
+        _change_vendor_status(request, vendor, active=True)
+        return Response(VendorSerializer(vendor).data, status=status.HTTP_200_OK)
+
+
+class VendorDeactivateView(generics.GenericAPIView):
+    """Explicitly deactivate a vendor (FINANCE_ADMIN only). The record and
+    its historical identity are preserved; deactivation never deletes."""
+
+    permission_classes = [IsAuthenticated, IsActiveOrganizationFinanceAdmin]
+
+    def get_queryset(self):
+        return Vendor.objects.filter(
+            organization_id=self.kwargs["organization_pk"]
+        ).select_related("organization")
+
+    def post(self, request, *args, **kwargs):
+        vendor = self.get_object()
+        _change_vendor_status(request, vendor, active=False)
+        return Response(VendorSerializer(vendor).data, status=status.HTTP_200_OK)

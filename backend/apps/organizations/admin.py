@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import AuditEvent, Organization, OrganizationMembership
+from .models import AuditEvent, Organization, OrganizationMembership, Vendor
 
 
 @admin.register(Organization)
@@ -15,6 +15,39 @@ class OrganizationMembershipAdmin(admin.ModelAdmin):
     list_display = ("user", "organization", "role", "is_active")
     list_filter = ("role", "is_active", "organization")
     search_fields = ("user__username", "organization__name")
+
+
+@admin.register(Vendor)
+class VendorAdmin(admin.ModelAdmin):
+    """Read-only vendor surface.
+
+    Vendors are managed exclusively through the audited API endpoints; the
+    admin is registered read-only so no alternate, un-audited mutation path
+    exists (Slice 3 spec S6).
+    """
+
+    list_display = ("legal_name", "organization", "tax_id", "status", "created_at")
+    list_filter = ("status", "organization")
+    search_fields = ("legal_name", "tax_id", "organization__name")
+    ordering = ("-created_at",)
+    readonly_fields = [
+        "id",
+        "organization",
+        "legal_name",
+        "tax_id",
+        "status",
+        "created_at",
+        "updated_at",
+    ]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(AuditEvent)

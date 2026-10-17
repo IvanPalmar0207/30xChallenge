@@ -7,6 +7,10 @@ from .views import (
     OrganizationViewSet,
     UserActivationView,
     UserCreateView,
+    VendorActivateView,
+    VendorDeactivateView,
+    VendorDetailView,
+    VendorListCreateView,
 )
 
 router = DefaultRouter()
@@ -35,5 +39,28 @@ urlpatterns = [
         "organizations/<uuid:organization_pk>/users/<int:pk>/",
         UserActivationView.as_view(),
         name="organization-user-detail",
+    ),
+    # Vendor management (Slice 3). Reads: any active member of the active
+    # organization; mutations: FINANCE_ADMIN only. Activation/deactivation
+    # are explicit operations; the ordinary PATCH never touches status.
+    path(
+        "organizations/<uuid:organization_pk>/vendors/",
+        VendorListCreateView.as_view(),
+        name="organization-vendor-list",
+    ),
+    path(
+        "organizations/<uuid:organization_pk>/vendors/<uuid:pk>/",
+        VendorDetailView.as_view(),
+        name="organization-vendor-detail",
+    ),
+    path(
+        "organizations/<uuid:organization_pk>/vendors/<uuid:pk>/activate/",
+        VendorActivateView.as_view(),
+        name="organization-vendor-activate",
+    ),
+    path(
+        "organizations/<uuid:organization_pk>/vendors/<uuid:pk>/deactivate/",
+        VendorDeactivateView.as_view(),
+        name="organization-vendor-deactivate",
     ),
 ]

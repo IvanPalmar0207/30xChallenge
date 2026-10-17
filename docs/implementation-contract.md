@@ -94,3 +94,4 @@ multi-currency treasury features, and full enterprise workflow tooling.
 | 2026-10-16 | Initial contract agreed for Phase 1 (repository foundation). |
 | 2026-10-17 | Phase 2, slice 1: tenant-scoped authentication baseline (organizations, memberships, roles, `/api/v1/` endpoints). Invariants unchanged. |
 | 2026-10-17 | Phase 2, slice 2: account lifecycle and membership administration (admin-created users, memberships, role assignment, activation, transactional audit trail). Invariants unchanged. |
+| 2026-10-17 | Phase 2, slice 3: organization-scoped vendor management (Vendor model, reads for active members, FINANCE_ADMIN-only mutations, explicit activation/deactivation, transactional audit trail). Invariants unchanged. |

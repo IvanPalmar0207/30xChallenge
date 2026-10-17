@@ -4,7 +4,12 @@ from django.contrib.auth import get_user_model
 
 from rest_framework import serializers
 
-from .models import Organization, OrganizationMembership, OrganizationRole
+from .models import (
+    Organization,
+    OrganizationMembership,
+    OrganizationRole,
+    Vendor,
+)
 
 User = get_user_model()
 
@@ -132,3 +137,107 @@ class UserActivationSerializer(serializers.Serializer):
     """Deactivate or reactivate an account (scoped to the URL organization)."""
 
     is_active = serializers.BooleanField()
+
+
+# ---------------------------------------------------------------------------
+# Vendors (Slice 3)
+# ---------------------------------------------------------------------------
+
+
+def _normalize_tax_id(value):
+    """Conservative, jurisdiction-agnostic normalization: strip + uppercase.
+
+    Hyphens, internal spaces, and other characters are preserved verbatim;
+    no country-specific format validation is performed (documented
+    limitation). The normalized value is what gets stored, so the database
+    uniqueness constraint operates on the same normalized form.
+    """
+
+    normalized = value.strip().upper()
+    if not normalized:
+        raise serializers.ValidationError(
+            "Tax identifier must not be blank."
+        )
+    if len(normalized) > 50:
+        raise serializers.ValidationError(
+            "Tax identifier must be at most 50 characters."
+        )
+    return normalized
+
+
+class VendorSerializer(serializers.ModelSerializer):
+    """Read representation of a vendor (organization ownership read-only)."""
+
+    organization = OrganizationSerializer(read_only=True)
+
+    class Meta:
+        model = Vendor
+        fields = [
+            "id",
+            "organization",
+            "legal_name",
+            "tax_id",
+            "status",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class VendorCreateSerializer(serializers.Serializer):
+    """Create a vendor in the URL's organization.
+
+    Writable allowlist: legal_name and tax_id only. Status defaults to
+    active server-side; organization ownership comes from the URL, never
+    from the client; internal/audit fields are not writable.
+    """
+
+    legal_name = serializers.CharField(max_length=200)
+    tax_id = serializers.CharField()
+
+    def validate_tax_id(self, value):
+        return _normalize_tax_id(value)
+
+    def validate(self, attrs):
+        organization = self.context.get("organization")
+        if organization is not None and Vendor.objects.filter(
+            organization=organization, tax_id=attrs["tax_id"]
+        ).exists():
+            raise serializers.ValidationError(
+                "A vendor with this tax identifier already exists in this organization."
+            )
+        return attrs
+
+    def create(self, validated_data):
+        organization = validated_data.pop("organization")
+        return Vendor.objects.create(**validated_data, organization=organization)
+
+
+class VendorUpdateSerializer(serializers.ModelSerializer):
+    """Update business data only: legal_name and/or tax_id (partial).
+
+    `status` is deliberately not writable here: an ordinary update can never
+    silently reactivate an inactive vendor. Activation/deactivation are
+    explicit, separately authorized operations.
+    """
+
+    class Meta:
+        model = Vendor
+        fields = ["legal_name", "tax_id"]
+
+    def validate_tax_id(self, value):
+        return _normalize_tax_id(value)
+
+    def validate(self, attrs):
+        organization = self.context.get("organization")
+        if "tax_id" in attrs and organization is not None:
+            queryset = Vendor.objects.filter(
+                organization=organization, tax_id=attrs["tax_id"]
+            )
+            if self.instance is not None:
+                queryset = queryset.exclude(pk=self.instance.pk)
+            if queryset.exists():
+                raise serializers.ValidationError(
+                    "A vendor with this tax identifier already exists in this organization."
+                )
+        return attrs

@@ -86,6 +86,49 @@ class OrganizationMembership(models.Model):
         return f"{self.user} @ {self.organization} ({self.role})"
 
 
+class Vendor(models.Model):
+    """A supplier owned by exactly one organization (tenant-scoped).
+
+    Vendors are never deleted: deactivation (status=inactive) preserves the
+    record and its historical identity. The tax identifier is normalized
+    (strip + uppercase) before storage and uniqueness checks; the supported
+    jurisdiction is unspecified, so no country-specific format validation is
+    performed (documented limitation).
+    """
+
+    class Status(models.TextChoices):
+        ACTIVE = "active"
+        INACTIVE = "inactive"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name="vendors",
+    )
+    legal_name = models.CharField(max_length=200)
+    tax_id = models.CharField(max_length=50)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.ACTIVE,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["legal_name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization", "tax_id"],
+                name="unique_vendor_tax_id_per_organization",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.legal_name} @ {self.organization}"
+
+
 class AuditEvent(models.Model):
     """Append-only audit record for security-relevant administrative changes.
 
@@ -107,6 +150,10 @@ class AuditEvent(models.Model):
         MEMBERSHIP_ROLE_CHANGED = "membership_role_changed", "Membership role changed"
         MEMBERSHIP_ACTIVATED = "membership_activated", "Membership activated"
         MEMBERSHIP_DEACTIVATED = "membership_deactivated", "Membership deactivated"
+        VENDOR_CREATED = "vendor_created", "Vendor created"
+        VENDOR_UPDATED = "vendor_updated", "Vendor updated"
+        VENDOR_ACTIVATED = "vendor_activated", "Vendor activated"
+        VENDOR_DEACTIVATED = "vendor_deactivated", "Vendor deactivated"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     actor = models.ForeignKey(

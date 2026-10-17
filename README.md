@@ -123,8 +123,10 @@ membership in the URL organization; anyone else gets the same 404. Inside the
 organization, forbidden operations return 403: modifying your own
 membership, modifying global-superuser memberships, or granting
 `FINANCE_ADMIN` (no delegation rule exists yet — only `OPERATOR` /
-`APPROVER` / `AUDITOR` are grantable). Login and token issuance are not
-implemented yet.
+`APPROVER` / `AUDITOR` are grantable). Vendor reads (list/retrieve) are open
+to any ACTIVE member of the ACTIVE organization; vendor creation, updates,
+and activation/deactivation require `FINANCE_ADMIN` (anyone else gets the
+same 404). Login and token issuance are not implemented yet.
 
 | Method | Path | Behavior |
 | --- | --- | --- |
@@ -136,6 +138,42 @@ implemented yet.
 | GET / PATCH | `/api/v1/organizations/{id}/memberships/{membership_id}/` | Read; change role or active state (FINANCE_ADMIN only) |
 | POST | `/api/v1/organizations/{id}/users/` | Create an account + first membership; unusable initial password (FINANCE_ADMIN only) |
 | PATCH | `/api/v1/organizations/{id}/users/{user_id}/` | Activate / deactivate an account (FINANCE_ADMIN only) |
+| GET | `/api/v1/organizations/{id}/vendors/` | List vendors of the organization, active and inactive (any active member) |
+| POST | `/api/v1/organizations/{id}/vendors/` | Create a vendor (FINANCE_ADMIN only) |
+| GET | `/api/v1/organizations/{id}/vendors/{vendor_id}/` | One vendor of the organization, active or inactive (any active member) |
+| PATCH | `/api/v1/organizations/{id}/vendors/{vendor_id}/` | Update legal name or tax identifier (FINANCE_ADMIN only; never status) |
+| POST | `/api/v1/organizations/{id}/vendors/{vendor_id}/activate/` | Explicitly activate a vendor (FINANCE_ADMIN only) |
+| POST | `/api/v1/organizations/{id}/vendors/{vendor_id}/deactivate/` | Explicitly deactivate a vendor, preserving the record (FINANCE_ADMIN only) |
+
+## Vendors
+
+Organization-scoped vendor management (Phase 2, slice 3). A vendor belongs to
+exactly one organization (resolved from the URL, never from the request body)
+and is never deleted: deactivation (status `inactive`) preserves the record
+and its historical identity. Reads are open to any ACTIVE member of the ACTIVE
+organization; creation, updates, and activation/deactivation require an ACTIVE
+`FINANCE_ADMIN` membership (uniform 404 for everyone else).
+
+- **Tax identifier** — normalized with `strip()` + `upper()` only (hyphens,
+  internal spaces, and other characters are preserved; no country-specific
+  format validation, because the supported jurisdiction is unspecified). The
+  normalized value is what gets stored, so the database uniqueness constraint
+  operates on it: one tax identifier per organization, and the same identifier
+  is allowed in different organizations.
+- **Activation** — explicit operations only. The ordinary `PATCH` accepts
+  `legal_name` and `tax_id`; `status` is not writable there, so an inactive
+  vendor is never silently reactivated. Both operations are idempotent and
+  recorded in the audit trail in the same transaction as the change.
+- **Audit** — `vendor_created`, `vendor_updated` (only when business data
+  actually changed; metadata lists changed fields with from/to values, never
+  the full request body), `vendor_activated`, and `vendor_deactivated` events
+  with actor, organization, target, and timestamp. A failed audit write rolls
+  back the mutation. Append-only remains enforced at the application level
+  (the database itself does not enforce it). The Django admin surface for
+  vendors is read-only, so no un-audited mutation path exists.
+- **No financial claims** — vendor verification, invoice blocking, or payment
+  decisions are out of scope for this slice; a vendor's `active`/`inactive`
+  status carries no financial effect yet.
 
 ## Commands
 
@@ -181,12 +219,20 @@ implemented yet.
   non-admins, 403 for self-modification or superuser targets, no
   `FINANCE_ADMIN` delegation), and an append-only `AuditEvent` trail recorded
   transactionally with every change (read-only in the Django admin).
-  72 integration tests in total (25 slice 1 + 47 slice 2).
+- (Phase 2, slice 3) organization-scoped vendor management: `Vendor` model
+  owned by exactly one organization with a database-level (organization, tax
+  identifier) uniqueness constraint and conservative strip+uppercase tax
+  identifier normalization; reads for any active member; create/update/
+  activate/deactivate reserved for FINANCE_ADMIN (uniform 404); explicit
+  `activate/` / `deactivate/` operations (the ordinary PATCH never touches
+  status); transactional audit events (`vendor_created`, `vendor_updated`,
+  `vendor_activated`, `vendor_deactivated`); read-only vendor admin surface.
+  112 integration tests in total (25 slice 1 + 47 slice 2 + 40 slice 3).
 
 **Not implemented yet (planned phases)** — public login/registration and
 password setup or reset flows (created accounts hold an unusable password);
 an audit read/export API (records exist but only the admin can browse them);
-vendor and invoice models; AI invoice extraction; the deterministic policy
+invoice models; AI invoice extraction; the deterministic policy
 engine; the approval workflow; frontend administration UI. No placeholder
 business logic has been added; domain apps land under `backend/apps/` and
 feature modules under `frontend/src/app/features/` as they are built.
