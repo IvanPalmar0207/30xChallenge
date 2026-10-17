@@ -116,14 +116,26 @@ All endpoints require authentication (DRF Token or session authentication).
 The access gate for organizations is an ACTIVE membership in an ACTIVE
 organization, resolved server-side. Any other case — unknown ID, inactive
 membership, inactive organization, or another user's organization — returns
-the same 404 and never discloses whether another organization exists. Login
-and token issuance are not implemented yet.
+the same 404 and never discloses whether another organization exists.
+
+Administration endpoints additionally require an ACTIVE `FINANCE_ADMIN`
+membership in the URL organization; anyone else gets the same 404. Inside the
+organization, forbidden operations return 403: modifying your own
+membership, modifying global-superuser memberships, or granting
+`FINANCE_ADMIN` (no delegation rule exists yet — only `OPERATOR` /
+`APPROVER` / `AUDITOR` are grantable). Login and token issuance are not
+implemented yet.
 
 | Method | Path | Behavior |
 | --- | --- | --- |
 | GET | `/api/v1/organizations/` | Organizations the authenticated user can access |
 | GET | `/api/v1/organizations/{id}/` | One accessible organization (uniform 404 otherwise) |
 | GET | `/api/v1/auth/me/` | Safe profile + active memberships with roles |
+| GET | `/api/v1/organizations/{id}/memberships/` | Memberships of the organization (FINANCE_ADMIN only) |
+| POST | `/api/v1/organizations/{id}/memberships/` | Create a membership for an existing user (FINANCE_ADMIN only) |
+| GET / PATCH | `/api/v1/organizations/{id}/memberships/{membership_id}/` | Read; change role or active state (FINANCE_ADMIN only) |
+| POST | `/api/v1/organizations/{id}/users/` | Create an account + first membership; unusable initial password (FINANCE_ADMIN only) |
+| PATCH | `/api/v1/organizations/{id}/users/{user_id}/` | Activate / deactivate an account (FINANCE_ADMIN only) |
 
 ## Commands
 
@@ -153,22 +165,35 @@ and token issuance are not implemented yet.
 
 ## Implementation status (Phase 1)
 
-**Done** — (Phase 1) repository foundation, and (Phase 2, slice 1)
-tenant-scoped authentication baseline: `Organization` and
-`OrganizationMembership` models with a database-level (user, organization)
-uniqueness constraint, seeded organization roles (`FINANCE_ADMIN` /
-`OPERATOR` / `APPROVER` / `AUDITOR`), server-side active-membership
-authorization with uniform 404 behavior, DRF Token + session authentication
-baseline, `/api/v1/organizations/`, `/api/v1/organizations/{id}/`,
-`/api/v1/auth/me/`, and 24 integration tests covering the tenant-isolation
-invariants.
+**Done** —
+- (Phase 1) repository foundation.
+- (Phase 2, slice 1) tenant-scoped authentication baseline: `Organization`
+  and `OrganizationMembership` models with a database-level (user,
+  organization) uniqueness constraint, seeded organization roles
+  (`FINANCE_ADMIN` / `OPERATOR` / `APPROVER` / `AUDITOR`), server-side
+  active-membership authorization with uniform 404 behavior, DRF Token +
+  session authentication baseline, `/api/v1/organizations/`,
+  `/api/v1/organizations/{id}/`, `/api/v1/auth/me/`.
+- (Phase 2, slice 2) account lifecycle and membership administration:
+  administrator-created accounts (email normalized to the username, unusable
+  initial password), membership create / role change / activate-deactivate
+  under FINANCE_ADMIN-only server-side authorization (uniform 404 for
+  non-admins, 403 for self-modification or superuser targets, no
+  `FINANCE_ADMIN` delegation), and an append-only `AuditEvent` trail recorded
+  transactionally with every change (read-only in the Django admin).
+  72 integration tests in total (25 slice 1 + 47 slice 2).
 
-**Not implemented yet (planned phases)** — login/registration and token
-issuance; vendor and invoice models; AI invoice extraction; the deterministic
-policy engine; approval workflow; audit trail; functional UI. No placeholder
+**Not implemented yet (planned phases)** — public login/registration and
+password setup or reset flows (created accounts hold an unusable password);
+an audit read/export API (records exist but only the admin can browse them);
+vendor and invoice models; AI invoice extraction; the deterministic policy
+engine; the approval workflow; frontend administration UI. No placeholder
 business logic has been added; domain apps land under `backend/apps/` and
 feature modules under `frontend/src/app/features/` as they are built.
 
-**Known limitations** — local SQLite is the only confirmed database
-(PostgreSQL is pre-configured but untested); login and token issuance are
-deferred to a later slice; the Django admin is the default scaffold.
+**Known limitations** — the only confirmed database is local SQLite
+(PostgreSQL is pre-configured but untested); created accounts cannot log in
+until a password-setup flow exists; `FINANCE_ADMIN` cannot be granted through
+the API (no delegation rule); audit append-only is enforced at the
+application level, not by the database; the Django admin is the default
+scaffold.
