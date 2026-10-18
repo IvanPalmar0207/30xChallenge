@@ -55,3 +55,21 @@ Desktop.ini
 
 # ---- Agent tooling cache (local pi/gentle-ai skill registry) ----------------
 .atl/
+
+# Local Netlify folder
+.netlify
+
+# ---- PayBlood deployment safety -------------------------------------------
+# Sensitive local files and directories excluded from version control
+backend/.diagtmp/
+backend/db.sqlite3.bak-pre-0007
+backend/requirements.txt
+backend/apps/organizations/migrations/*.py
+backend/apps/organizations/migrations/000*.py
+backend/apps/accounts/migrations/*.py
+backend/apps/extraction/migrations/*.py
+
+# Environment placeholder only (never actual credentials)
+.env.example
+# Note: the real .env is gitignored at the root, tracked only as .env.example
+# in the repository for local development and CI.
