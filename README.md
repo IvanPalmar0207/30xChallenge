@@ -45,14 +45,15 @@ Only mark a scenario as verified after testing it against the deployed applicati
 ## Architecture
 
 ```mermaid
-flowchart TD
-    A[User / Browser] --> B[Angular Frontend]
-    B --> C[Django REST Framework API]
-    C --> D[PostgreSQL Database]
-    C --> E[Deterministic Policy Engine]
-    C --> F[AI-assisted Extraction]
-    C --> G[Audit Events]
+flowchart TB
+    A["User / Browser"] --> B["Angular Frontend"]
+    B --> C["Django REST Framework API"]
+    C --> D[("PostgreSQL Database")]
+    C --> E["Deterministic Policy Engine"]
+    C --> F["AI-assisted Extraction"]
+    C --> G["Audit Events"]
 ```
+
 
 ### Technology stack
 
