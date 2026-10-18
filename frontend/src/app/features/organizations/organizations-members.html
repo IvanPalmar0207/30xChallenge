@@ -1,0 +1,377 @@
+<pb-folio [seq]="3" label="Administration · Members" />
+
+<header class="pb-page-head">
+  <a routerLink="/app/organizations" class="pb-btn pb-btn--ghost pb-btn--sm">
+    ← Organizations
+  </a>
+  <h1 class="pb-page-title">Members</h1>
+  <p class="pb-page-lede">
+    <span class="pb-mono">{{ organizationName() }}</span> — members and
+    memberships managed by FINANCE_ADMIN. Roles are organization-scoped and
+    FINANCE_ADMIN can never be delegated. The server audits every change.
+  </p>
+</header>
+
+@if (state() === 'loading') {
+  <div class="panel" aria-live="polite" aria-busy="true">
+    <div class="skeleton" aria-hidden="true">
+      <span class="skeleton__line" style="width: 60%"></span>
+      <span class="skeleton__line" style="width: 45%"></span>
+      <span class="skeleton__line" style="width: 80%"></span>
+    </div>
+    <p class="panel__hint">Loading members…</p>
+  </div>
+} @else if (state() === 'forbidden') {
+  <div class="panel panel--error" role="alert">
+    <h2 class="panel__title">No permission</h2>
+    <p class="panel__body">
+      Only an active FINANCE_ADMIN of this organization can manage members.
+    </p>
+  </div>
+} @else if (state() === 'error') {
+  <div class="panel panel--error" role="alert">
+    <h2 class="panel__title">We could not load members</h2>
+    <p class="panel__body">
+      Check your connection and try again.
+    </p>
+    <button type="button" class="pb-btn pb-btn--ghost" (click)="load()">
+      Retry
+    </button>
+  </div>
+} @else {
+  <!-- ── Create user ─────────────────────────────────────────────────── -->
+  <section class="panel panel--create" aria-labelledby="create-title">
+    <h2 id="create-title" class="panel__title">Create user</h2>
+    <p class="panel__body">
+      Register an account and assign its role within this organization.
+    </p>
+
+    <div class="pb-review-form">
+      <div class="pb-form-group">
+        <label for="create_email" class="pb-label">Email</label>
+        <input
+          id="create_email"
+          type="email"
+          class="pb-input"
+          [value]="createEmail()"
+          (input)="setCreateEmail($event)"
+          placeholder="new-member@company.com"
+          autocomplete="off"
+        />
+      </div>
+
+      <div class="pb-form-group">
+        <label for="create_role" class="pb-label">Role within the organization</label>
+        <select id="create_role" class="pb-select" [value]="createRole()" (change)="setCreateRole($event)">
+          @for (role of grantableRoles; track role) {
+            <option [value]="role">{{ role }}</option>
+          }
+        </select>
+      </div>
+
+      <p class="panel__hint">
+        The account will be created without a usable initial password. You
+        will then share a secure link so the user can set their password
+        before signing in.
+      </p>
+
+      @if (createState() === 'error') {
+        <div class="pb-error-banner" role="alert">
+          <p>{{ createError() }}</p>
+        </div>
+      }
+
+      <div class="form-actions">
+        <button
+          type="button"
+          class="pb-btn pb-btn--primary form-submit"
+          [disabled]="createState() === 'submitting' || createEmail().trim().length === 0"
+          (click)="createAccount()"
+        >
+          @if (createState() === 'submitting') {
+            Creating user…
+          } @else {
+            Create user
+          }
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Inline confirmation before issuing a link for an existing member ── -->
+  @if (issueConfirmOpen()) {
+    <section class="panel panel--confirm" role="dialog" aria-modal="true" aria-labelledby="issue-confirm-title">
+      <h2 id="issue-confirm-title" class="panel__title">Generate setup link</h2>
+      <p class="panel__body">
+        You are about to generate a link so this user can set their initial
+        password. After generating the link, share it directly with the
+        matching person so they can complete the setup and access PayBlood.
+        The previous link will stop working when this operation completes.
+      </p>
+      <p class="panel__hint">
+        For: <span class="pb-mono">{{ issueConfirmEmail() }}</span>
+      </p>
+      <div class="confirm-actions">
+        <button type="button" class="pb-btn pb-btn--ghost" (click)="cancelIssueConfirm()">Cancel</button>
+        <button
+          type="button"
+          class="pb-btn pb-btn--primary"
+          [disabled]="invitingFor() !== null"
+          (click)="confirmIssueSetupLink()"
+        >
+          Generate link
+        </button>
+      </div>
+    </section>
+  }
+
+  <!-- ── Setup link panel ───────────────────────────────────────────── -->
+  @if (inviteState() === 'success' || inviteState() === 'regenerated'; as panelState) {
+    <section
+      class="panel panel--setup-link"
+      aria-labelledby="setup-link-title"
+      [attr.aria-live]="'polite'"
+    >
+      <h2 id="setup-link-title" class="panel__title">
+        @if (inviteState() === 'regenerated') {
+          New setup link generated
+        } @else if (inviteReason() === 'created') {
+          User created successfully
+        } @else {
+          Setup link generated
+        }
+      </h2>
+      <p class="panel__body">
+        @if (inviteReason() === 'created') {
+          The account is created, but the user still has to set their password
+          before signing in.
+        } @else {
+          The link is ready to share with this user. Copy it and send it
+          directly over a secure channel. The person opens it, creates their
+          password, and then signs in to PayBlood.
+        }
+      </p>
+      <p class="panel__hint">
+        For: <span class="pb-mono">{{ accountEmail() }}</span>
+      </p>
+
+      <div class="setup-link">
+        <h3 class="setup-link__title">Password setup link</h3>
+        <p class="setup-link__desc">
+          Copy the link and share it with the user over a secure channel. The
+          user opens it, creates their password, and then signs in with their
+          email and the chosen password.
+        </p>
+        <p class="setup-link__meta">
+          The link expires in 72 hours and can only be used once.
+        </p>
+
+        <div class="setup-link__row">
+          <input
+            readonly
+            class="setup-link__value"
+            [value]="displayedLink()"
+            [attr.aria-label]="'Password setup link for ' + accountEmail()"
+          />
+          <div class="setup-link__actions">
+            <button
+              type="button"
+              class="pb-btn pb-btn--ghost pb-btn--sm"
+              (click)="toggleLinkVisible()"
+            >
+              {{ linkVisible() ? 'Hide link' : 'Show link' }}
+            </button>
+            <button
+              type="button"
+              class="pb-btn pb-btn--primary pb-btn--sm"
+              (click)="copyLink()"
+            >
+              Copy link
+            </button>
+            <button
+              type="button"
+              class="pb-btn pb-btn--ghost pb-btn--sm"
+              (click)="hideInvite()"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+
+        @if (copied()) {
+          <p class="setup-link__copied" role="status">
+            Link copied — now share it with the indicated user. Do not post
+            it or send it to other people.
+          </p>
+        }
+        @if (copyError()) {
+          <p class="setup-link__copy-error" role="alert">{{ copyError() }}</p>
+        }
+
+        <button
+          type="button"
+          class="pb-btn pb-btn--ghost pb-btn--sm setup-link__regenerate"
+          [disabled]="regenerating()"
+          (click)="confirmRegenerate()"
+        >
+          @if (regenerating()) {
+            Generating new link…
+          } @else {
+            Generate new link
+          }
+        </button>
+      </div>
+    </section>
+  }
+
+  @if (inviteState() === 'failed') {
+    <section class="panel panel--error panel--setup-failed" role="alert">
+      <h2 class="panel__title">User created, but access is not ready</h2>
+      <p class="panel__body">
+        {{ inviteError() }}
+      </p>
+    </section>
+  }
+
+  <!-- ── Add an existing account ─────────────────────────────────────── -->
+  <section class="panel panel--create" aria-labelledby="add-title">
+    <h2 id="add-title" class="panel__title">Add an existing account</h2>
+    <p class="panel__body">
+      Add a person who already has a PayBlood account. Only the numeric user
+      id and a grantable role are accepted; passwords and global privileges
+      are never sent.
+    </p>
+
+    <div class="pb-review-form">
+      <div class="pb-form-group">
+        <label for="add_user" class="pb-label">User id</label>
+        <input
+          id="add_user"
+          type="number"
+          min="1"
+          class="pb-input"
+          [value]="addUserId()"
+          (input)="setAddUserId($event)"
+          placeholder="e.g. 42"
+          autocomplete="off"
+        />
+      </div>
+
+      <div class="pb-form-group">
+        <label for="add_role" class="pb-label">Role</label>
+        <select id="add_role" class="pb-select" [value]="addRole()" (change)="setAddRole($event)">
+          @for (role of grantableRoles; track role) {
+            <option [value]="role">{{ role }}</option>
+          }
+        </select>
+      </div>
+
+      @if (addState() === 'error') {
+        <div class="pb-error-banner" role="alert">
+          <p>{{ addError() }}</p>
+        </div>
+      }
+
+      <div class="form-actions">
+        <button
+          type="button"
+          class="pb-btn pb-btn--primary form-submit"
+          [disabled]="addState() === 'submitting' || addUserId().trim().length === 0"
+          (click)="addExisting()"
+        >
+          @if (addState() === 'submitting') {
+            Adding…
+          } @else {
+            Add member
+          }
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Member list ─────────────────────────────────────────────────── -->
+  <section class="panel" aria-labelledby="list-title">
+    <h2 id="list-title" class="panel__title">Organization members</h2>
+
+    @if (visibleMemberships().length === 0) {
+      <div class="panel__empty">
+        <h2 class="panel__title">No members in this organization yet</h2>
+        <p class="panel__body">
+          Add users to assign them a role and let them access the
+          capabilities they are entitled to.
+        </p>
+        <button
+          type="button"
+          class="pb-btn pb-btn--primary"
+          (click)="focusCreate()"
+        >
+          Create first user
+        </button>
+      </div>
+    } @else {
+      <div class="pb-table-scroll">
+        <table class="pb-table members">
+          <thead>
+            <tr>
+              <th>Account</th>
+              <th>Role</th>
+              <th>Status</th>
+              <th class="num">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (membership of visibleMemberships(); track membership.id) {
+              <tr>
+                <td>
+                  <span class="pb-mono">{{ membership.user.email || membership.user.username }}</span>
+                </td>
+                <td class="pb-mono">{{ membership.role }}</td>
+                <td>
+                  <span class="statebadge" [class.statebadge--active]="membership.is_active">
+                    {{ membership.is_active ? 'active' : 'inactive' }}
+                  </span>
+                </td>
+                <td class="num actions-cell">
+                  @if (membership.user.email && membership.user.email.length > 0) {
+                    <button
+                      type="button"
+                      class="pb-btn pb-btn--ghost pb-btn--sm"
+                      [disabled]="invitingFor() === membership.user.id"
+                      (click)="issueSetupLink(membership)"
+                      [attr.aria-label]="'Issue setup link for ' + membership.user.email"
+                    >
+                      Issue setup link
+                    </button>
+                  }
+                  @if (membership.role !== 'FINANCE_ADMIN') {
+                    <label class="role-select-label" [attr.for]="'role-' + membership.id">
+                      <select
+                        #roleSelect
+                        id="role-{{ membership.id }}"
+                        class="role-select pb-select pb-select--sm"
+                        (change)="changeRole(membership, roleSelect.value)"
+                      >
+                        @for (role of grantableRoles; track role) {
+                          <option [value]="role" [selected]="membership.role === role">{{ role }}</option>
+                        }
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      class="pb-btn pb-btn--ghost pb-btn--sm action-toggle"
+                      [class.is-danger]="membership.is_active"
+                      (click)="toggleActive(membership)"
+                      [attr.aria-label]="(membership.is_active ? 'Deactivate ' : 'Activate ') + (membership.user.email || membership.user.username)"
+                    >
+                      {{ membership.is_active ? 'Deactivate' : 'Activate' }}
+                    </button>
+                  }
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+  </section>
+}

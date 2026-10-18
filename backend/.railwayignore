@@ -1,0 +1,13 @@
+# Exclusions only for Railway deploy packaging (complements .gitignore)
+# The CLI uploads the backend/ directory as the service root; keep secrets and
+# local state out of the build context while still shipping requirements.txt.
+.venv/
+venv/
+db.sqlite3
+db.sqlite3.bak-pre-0007
+__pycache__
+*.pyc
+.logs/
+media/
+staticfiles/
+test-artifacts/

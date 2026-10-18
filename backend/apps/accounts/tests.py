@@ -2,7 +2,7 @@
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
-from rest_framework.authtoken.models import Token
+from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.test import APIClient
 
 from apps.organizations.models import Organization, OrganizationMembership, OrganizationRole
@@ -11,8 +11,9 @@ User = get_user_model()
 
 
 def auth(client, user):
-    token, _ = Token.objects.get_or_create(user=user)
-    client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+    """Authenticate through the real JWT pipeline."""
+    access = RefreshToken.for_user(user).access_token
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
     return client
 
 
@@ -82,10 +83,21 @@ class MeEndpointTests(TestCase):
         data = response.data
         self.assertEqual(
             sorted(data.keys()),
-            sorted(["id", "username", "email", "first_name", "last_name", "memberships"]),
+            sorted(
+                [
+                    "id",
+                    "username",
+                    "email",
+                    "first_name",
+                    "last_name",
+                    "memberships",
+                    "is_global_admin",
+                ]
+            ),
         )
         self.assertEqual(data["username"], "alice")
         self.assertEqual(data["email"], "alice@example.test")
+        self.assertFalse(data["is_global_admin"])
         self.assertEqual(len(data["memberships"]), 1)
         membership = data["memberships"][0]
         self.assertEqual(membership["organization_id"], str(self.org_a.id))

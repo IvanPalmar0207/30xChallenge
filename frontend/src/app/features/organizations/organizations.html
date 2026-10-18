@@ -1,0 +1,91 @@
+
+    <pb-folio [seq]="3" label="Administration · Organizations" />
+
+    <header class="pb-page-head">
+      <h1 class="pb-page-title">Organizations</h1>
+      <p class="pb-page-lede">
+        Tenants you belong to, resolved from your session. The server scopes
+        this list to your active memberships; other organizations are never
+        visible here.
+      </p>
+    </header>
+
+    @if (state() === 'loading') {
+      <div class="panel" aria-live="polite" aria-busy="true">
+        <div class="skeleton" aria-hidden="true">
+          <span class="skeleton__line" style="width: 60%"></span>
+          <span class="skeleton__line" style="width: 45%"></span>
+          <span class="skeleton__line" style="width: 80%"></span>
+        </div>
+        <p class="panel__hint">Loading your organizations…</p>
+      </div>
+    } @else if (state() === 'forbidden') {
+      <div class="panel panel--error" role="alert">
+        <h2 class="panel__title">No permission</h2>
+        <p class="panel__body">
+          Your session does not have access to organization administration.
+        </p>
+      </div>
+    } @else if (state() === 'error') {
+      <div class="panel panel--error" role="alert">
+        <h2 class="panel__title">Could not load organizations</h2>
+        <p class="panel__body">
+          The server did not respond as expected. Check the connection and try
+          again.
+        </p>
+        <button type="button" class="pb-btn pb-btn--ghost" (click)="load()">
+          <pb-icon name="arrowRight" /> Retry
+        </button>
+      </div>
+    } @else {
+      @if (organizations().length === 0) {
+        <div class="panel panel--empty">
+          <h2 class="panel__title">No organizations yet</h2>
+          <p class="panel__body">
+            You are not a member of any active organization. An administrator
+            inviters users through this app; there is no self-registration.
+          </p>
+        </div>
+      } @else {
+        <div class="pb-table-scroll">
+        <table class="pb-table orgs">
+          <thead>
+            <tr>
+              <th>Organization</th>
+              <th>Status</th>
+              <th>Your role</th>
+              <th>Member since</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (org of organizations(); track org.id) {
+              <tr>
+                <td>
+                  <span class="orgs__name">{{ org.name }}</span>                  
+                </td>
+                <td>
+                  <span class="statebadge" [class.statebadge--active]="org.status === 'active'">
+                    {{ org.status }}
+                  </span>
+                </td>
+                <td class="pb-mono">{{ roleOf(org.id) }}</td>
+                <td>{{ org.created_at | date: 'mediumDate' }}</td>
+                <td>
+                  @if (roleOf(org.id) === 'FINANCE_ADMIN') {
+                    <a
+                      [routerLink]="['/app/organizations', org.id, 'members']"
+                      class="pb-btn pb-btn--ghost pb-btn--sm"
+                    >
+                      Members
+                    </a>
+                  }
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+        </div>
+      }
+    }
+  

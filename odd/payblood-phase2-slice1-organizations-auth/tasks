@@ -1,0 +1,9 @@
+# PayBlood Phase 2 Slice 1 — tasks mirror
+
+- [x] T1 Apps + settings
+- [x] T2 Models + migration
+- [x] T3 Organization API
+- [x] T4 /auth/me/ endpoint
+- [x] T5 Integration tests
+- [x] T6 README + docs corrections
+- [x] T7 Validation + report

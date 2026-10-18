@@ -1,0 +1,63 @@
+<div class="shell">
+  <aside class="shell__rail" [class.is-open]="railOpen()" aria-label="Application navigation">
+    <a routerLink="/app" class="shell__brand" (click)="closeRail()">
+      <pb-logo />
+    </a>
+
+    <nav class="shell__groups" aria-label="Sections">
+      @for (group of nav(); track group.label) {
+        <div class="shell__group">
+          <span class="shell__group-label">{{ group.label }}</span>
+          @for (item of group.items; track item.path) {
+            <a
+              class="shell__link"
+              routerLink="{{ item.path }}"
+              routerLinkActive="is-active"
+              [routerLinkActiveOptions]="{ exact: true }"
+              (click)="closeRail()"
+            >
+              <span class="shell__link-dot" aria-hidden="true"></span>
+              {{ item.label }}
+            </a>
+          }
+        </div>
+      }
+    </nav>
+
+    <div class="shell__rail-foot">
+      <span class="shell__rail-note">PayBlood · ledger shell</span>
+      <span class="shell__rail-note">authority: backend engine</span>
+    </div>
+  </aside>
+
+  <div
+    class="shell__overlay"
+    [class.is-visible]="railOpen()"
+    (click)="closeRail()"
+  ></div>
+
+  <div class="shell__main">
+    <header class="shell__topbar">
+      <button
+        type="button"
+        class="shell__burger"
+        (click)="toggleRail()"
+        [attr.aria-expanded]="railOpen()"
+        aria-label="Toggle navigation"
+      >
+        <span></span><span></span>
+      </button>
+      <p class="shell__crumb">PayBlood / <strong>{{ crumb() }}</strong></p>
+      <span class="shell__org" [title]="'Session context from the backend'">
+        <span class="shell__org-dot" aria-hidden="true"></span>
+        {{ membership()?.organization_name ?? 'no organization' }}
+      </span>
+      <span class="shell__user">{{ user()?.email ?? '…' }}</span>
+      <button type="button" class="shell__signout" (click)="signOut()">Sign out</button>
+    </header>
+
+    <main class="shell__content">
+      <router-outlet />
+    </main>
+  </div>
+</div>

@@ -96,6 +96,38 @@ class IsActiveOrganizationMemberInUrl(permissions.BasePermission):
         return True
 
 
+class IsActiveOrganizationApprover(permissions.BasePermission):
+    """Require an ACTIVE APPROVER membership in the ACTIVE organization named
+    by the URL's `organization_pk`.
+
+    Human approval decisions are reserved to the APPROVER role; FINANCE_ADMIN,
+    OPERATOR, AUDITOR, Django staff and superusers never gain it implicitly.
+    Unknown/inactive organizations, inactive memberships and non-approver
+    members resolve to the same 404 (no existence disclosure), consistent with
+    the other organization-scoped permissions.
+    """
+
+    message = "You do not have permission to approve invoices in this organization."
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        organization_pk = view.kwargs.get("organization_pk")
+        if not organization_pk:
+            return False
+        is_approver = OrganizationMembership.objects.filter(
+            user=user,
+            organization_id=organization_pk,
+            organization__status=Organization.Status.ACTIVE,
+            is_active=True,
+            role=OrganizationRole.APPROVER,
+        ).exists()
+        if not is_approver:
+            raise NotFound("Organization not found.")
+        return True
+
+
 class IsActiveOrganizationInvoiceCreator(permissions.BasePermission):
     """Require an ACTIVE FINANCE_ADMIN or OPERATOR membership in the ACTIVE
     organization named by the URL's `organization_pk`.
@@ -128,4 +160,28 @@ class IsActiveOrganizationInvoiceCreator(permissions.BasePermission):
         ).exists()
         if not is_creator:
             raise NotFound("Organization not found.")
+        return True
+
+
+class IsGlobalSuperAdmin(permissions.BasePermission):
+    """Require a Django superuser (global platform administrator).
+
+    This is the ONLY gate for the global organization administration surface.
+    A FINANCE_ADMIN membership in one organization never grants it: roles are
+    organization-scoped and create no cross-tenant authority. is_staff alone
+    does not grant it either, and ordinary authenticated users and
+    unauthenticated requests both resolve to a uniform 404, so the global
+    administration surface is never disclosed (HidingByNotExisting, consistent
+    with the organization-scoped permissions). Anonymous requests are answered
+    by IsAuthenticated first when both are listed.
+    """
+
+    message = "Not found."
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        if not user.is_superuser:
+            raise NotFound("Not found.")
         return True

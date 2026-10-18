@@ -1,0 +1,199 @@
+<pb-folio [seq]="1" label="Workspace · Dashboard" />
+
+<header class="pb-page-head">
+  <div class="headerSection" style="display: flex; align-items: center; justify-content: space-between; gap: 1rem;">
+    <div style="flex: 1;">
+      <h1 class="pb-page-title">Dashboard</h1>
+      <p class="pb-page-lede">
+        A real-data summary of <span class="pb-mono">{{ orgName() }}</span>.
+        Counts come from the organization's invoices and policies as served
+        by the backend; no figure here is invented. Organization isolation is
+        enforced by the API on every read.
+      </p>
+    </div>
+    <div class="dash-actions" style="display: flex; gap: 0.5rem;">
+      <a class="pb-btn pb-btn--ghost" routerLink="/app/invoices">
+        <pb-icon name="arrowRight" /> Invoices
+      </a>
+      <a class="pb-btn pb-btn--ghost" routerLink="/app/vendors">
+        <pb-icon name="arrowRight" /> Vendors
+      </a>
+    </div>
+  </div>
+</header>
+
+@if (state() === 'loading') {
+  <div class="panel" aria-live="polite" aria-busy="true">
+    <div class="skeleton" aria-hidden="true">
+      <span class="skeleton__line" style="width: 100%"></span>
+      <span class="skeleton__line" style="width: 74%"></span>
+      <span class="skeleton__line" style="width: 52%"></span>
+    </div>
+    <p class="panel__hint">Loading your summary…</p>
+  </div>
+} @else if (state() === 'noorganization') {
+  <div class="panel panel--empty">
+    <h2 class="panel__title">No active organization</h2>
+    <p class="panel__body">
+      Your session has no active membership, so there is no organization whose
+      data could be summarized.
+    </p>
+  </div>
+} @else if (state() === 'forbidden') {
+  <div class="panel panel--error" role="alert">
+    <h2 class="panel__title">No permission</h2>
+    <p class="panel__body">
+      Your session does not have access to this organization's data.
+    </p>
+  </div>
+} @else if (state() === 'error') {
+  <div class="panel panel--error" role="alert">
+    <h2 class="panel__title">Could not load the dashboard</h2>
+    <p class="panel__body">
+      The server did not respond as expected. Check the connection and try
+      again.
+    </p>
+    <button type="button" class="pb-btn pb-btn--ghost" (click)="load()">
+      <pb-icon name="arrowRight" /> Retry
+    </button>
+  </div>
+} @else {
+  <section class="stats" aria-label="Key counts">
+    <div class="stat">
+      <span class="stat__value pb-mono">{{ totalInvoices() }}</span>
+      <span class="stat__label">Invoices</span>
+    </div>
+    <div class="stat">
+      <span class="stat__value pb-mono">{{ attentionCount() }}</span>
+      <span class="stat__label">Need attention</span>
+    </div>
+    <div class="stat">
+      <span class="stat__value pb-mono">{{ policyVersionCount() }}</span>
+      <span class="stat__label">Policy versions</span>
+    </div>
+  </section>
+
+  <div class="dash-grid">
+    <section class="panel" aria-labelledby="pipeline-title">
+      <h2 id="pipeline-title" class="panel__title">Invoices by state</h2>
+      <p class="panel__hint">
+        Real statuses of this organization, counted from the server response.
+      </p>
+
+      @if (invoices().length === 0) {
+        <div class="panel panel--empty panel--inline">
+          <h3 class="panel__title">No invoices yet</h3>
+          <p class="panel__body">
+            This organization has no registered invoices at the moment.
+          </p>
+        </div>
+      } @else {
+        <dl class="pipeline">
+          @for (status of statusOrder; track status) {
+            <div class="pipeline__row">
+              <dt>
+                <span class="statebadge" [class]="'statebadge--' + status">
+                  {{ statusLabel(status) }}
+                </span>
+              </dt>
+              <dd class="pb-mono">{{ statusCounts()[status] }}</dd>
+            </div>
+          }
+        </dl>
+      }
+    </section>
+
+    <section class="panel" aria-labelledby="policy-title">
+      <h2 id="policy-title" class="panel__title">Active policy</h2>
+      <p class="panel__hint">
+        The version the engine will evaluate invoices against.
+      </p>
+
+      @if (activePolicy()) {
+        <dl class="facts">
+          <div class="fact">
+            <dt>Version</dt>
+            <dd class="pb-mono">v{{ activePolicy()!.version }}</dd>
+          </div>
+          <div class="fact">
+            <dt>Currencies</dt>
+            <dd>
+              {{ activePolicy()!.allowed_currencies.length
+                ? activePolicy()!.allowed_currencies.join(', ')
+                : 'no restriction' }}
+            </dd>
+          </div>
+          <div class="fact">
+            <dt>Max amount</dt>
+            <dd class="pb-mono">{{ activePolicy()!.max_amount ?? 'no cap' }}</dd>
+          </div>
+          <div class="fact">
+            <dt>Escalation</dt>
+            <dd class="pb-mono">
+              {{ activePolicy()!.escalation_threshold ?? 'no threshold' }}
+            </dd>
+          </div>
+        </dl>
+        <a routerLink="/app/policies" class="panel__link">Policies →</a>
+      } @else {
+        <div class="panel panel--empty panel--inline">
+          <h3 class="panel__title">No active policy</h3>
+          <p class="panel__body">
+            Without an active policy the engine escalates every invoice
+            (no_active_policy) — nothing is approved by default.
+          </p>
+        </div>
+        <a routerLink="/app/policies" class="panel__link">Configure policy →</a>
+      }
+    </section>
+  </div>
+
+  <section class="panel" aria-labelledby="recent-title">
+    <h2 id="recent-title" class="panel__title">Recent invoices</h2>
+    <p class="panel__hint">
+      Newest five by the backend's own ordering (created_at desc); an exact
+      view of the invoices list.
+    </p>
+
+    @if (recentInvoices().length === 0) {
+      <div class="panel panel--empty panel--inline">
+        <h3 class="panel__title">No invoices yet</h3>
+        <p class="panel__body">
+          This organization has no registered invoices at the moment.
+        </p>
+      </div>
+    } @else {
+      <div class="pb-table-scroll">
+      <table class="pb-table recent">
+        <thead>
+          <tr>
+            <th>Status</th>
+            <th>Invoice</th>
+            <th>Vendor</th>
+            <th>Issue</th>
+            <th class="num">Amount</th>
+            <th>Currency</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (invoice of recentInvoices(); track invoice.id) {
+            <tr>
+              <td>
+                <span class="statebadge" [class]="'statebadge--' + invoice.status">
+                  {{ statusLabel(invoice.status) }}
+                </span>
+              </td>
+              <td class="pb-mono">{{ invoice.invoice_number }}</td>
+              <td>{{ invoice.vendor.legal_name }}</td>
+              <td>{{ invoice.issue_date }}</td>
+              <td class="num pb-mono">{{ invoice.amount }}</td>
+              <td class="pb-mono">{{ invoice.currency }}</td>
+            </tr>
+          }
+        </tbody>
+      </table>
+      </div>
+      <a routerLink="/app/invoices" class="panel__link">All invoices →</a>
+    }
+  </section>
+}

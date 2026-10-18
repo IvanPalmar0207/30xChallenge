@@ -1,0 +1,103 @@
+<pb-folio [seq]="2" label="Workspace · Invoices" />
+
+<header class="pb-page-head">
+  <div class="headerSection" style="display: flex; align-items: center; justify-content: space-between; gap: 1rem;">
+    <div style="flex: 1;">
+      <h1 class="pb-page-title">Invoices</h1>
+      <p class="pb-page-lede">
+        Invoices of <span class="pb-mono">{{ orgName() }}</span>, served by the
+        backend. The server scopes this list to the active organization; no other
+        organization's invoices reach this view.
+      </p>
+    </div>
+    @if (cap.canCreateInvoice()) {
+      <a (click)="goInvoiceCreate()" class="orangeButton pb-btn pb-btn--primary">
+        Upload invoice
+      </a>
+    }
+  </div>
+</header>
+
+@if (state() === 'loading') {
+  <div class="panel" aria-live="polite" aria-busy="true">
+    <div class="skeleton" aria-hidden="true">
+      <span class="skeleton__line" style="width: 100%"></span>
+      <span class="skeleton__line" style="width: 82%"></span>
+      <span class="skeleton__line" style="width: 66%"></span>
+    </div>
+    <p class="panel__hint">Loading invoices…</p>
+  </div>
+} @else if (state() === 'noorganization') {
+  <div class="panel panel--empty">
+    <h2 class="panel__title">No active organization</h2>
+    <p class="panel__body">
+      Your session has no active membership, so there is no organization to
+      list invoices for.
+    </p>
+  </div>
+} @else if (state() === 'forbidden') {
+  <div class="panel panel--error" role="alert">
+    <h2 class="panel__title">No permission</h2>
+    <p class="panel__body">
+      Your session does not have access to this organization's invoices.
+    </p>
+  </div>
+} @else if (state() === 'error') {
+  <div class="panel panel--error" role="alert">
+    <h2 class="panel__title">Could not load invoices</h2>
+    <p class="panel__body">
+      The server did not respond as expected. Check the connection and try
+      again.
+    </p>
+    <button type="button" class="pb-btn pb-btn--ghost" (click)="load()">Retry</button>
+  </div>
+} @else {
+  @if (invoices().length === 0) {
+    <div class="panel panel--empty">
+      <h2 class="panel__title">No invoices yet</h2>
+      <p class="panel__body">
+        This organization has no registered invoices at the moment.
+      </p>
+    </div>
+  } @else {
+    <div class="pb-table-scroll">
+    <table class="pb-table invoices">
+      <thead>
+        <tr>
+          <th>Status</th>
+          <th>Invoice</th>
+          <th>Vendor</th>
+          <th>Issue</th>
+          <th>Due</th>
+          <th class="num">Amount</th>
+          <th>Currency</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (invoice of invoices(); track invoice.id) {
+          <tr
+            class="row-click"
+            tabindex="0"
+            role="link"
+            [attr.aria-label]="'Open invoice ' + invoice.invoice_number"
+            (click)="open(invoice.id)"
+            (keydown.enter)="open(invoice.id)"
+          >
+            <td>
+              <span class="statebadge" [class]="'statebadge--' + invoice.status">
+                {{ statusLabel(invoice.status) }}
+              </span>
+            </td>
+            <td class="pb-mono">{{ invoice.invoice_number }}</td>
+            <td>{{ invoice.vendor.legal_name }}</td>
+            <td>{{ invoice.issue_date }}</td>
+            <td>{{ invoice.due_date ?? '—' }}</td>
+            <td class="num pb-mono">{{ invoice.amount }}</td>
+            <td class="pb-mono">{{ invoice.currency }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+    </div>
+  }
+}

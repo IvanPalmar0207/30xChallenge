@@ -1,0 +1,166 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R] /Count 3 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R /F2 10 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 611 >>
+stream
+BT
+/F2 16 Tf
+(SYNTHETIC TEST INVOICE - C009A) Tj
+/F1 10 Tf
+0 -44 Td
+(This is a synthetic test document - not valid for payment.) Tj
+/F1 10 Tf
+0 -64 Td
+() Tj
+/F1 12 Tf
+0 -84 Td
+(Vendor: Maple Leaf Supplies) Tj
+/F1 12 Tf
+0 -106 Td
+(Tax ID: CA-123456789) Tj
+/F1 12 Tf
+0 -128 Td
+(Invoice No: INV-CAD-7788) Tj
+/F1 12 Tf
+0 -150 Td
+(Issue Date: 2026-04-02) Tj
+/F1 12 Tf
+0 -172 Td
+(Due Date: 2026-05-02) Tj
+/F1 12 Tf
+0 -194 Td
+(Currency: CAD) Tj
+/F1 12 Tf
+0 -216 Td
+(Suministros                               450.00) Tj
+/F1 12 Tf
+0 -238 Td
+() Tj
+/F1 13 Tf
+0 -260 Td
+(Total CAD                              450.00) Tj
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R /F2 10 0 R >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 611 >>
+stream
+BT
+/F2 16 Tf
+(SYNTHETIC TEST INVOICE - C009B) Tj
+/F1 10 Tf
+0 -44 Td
+(This is a synthetic test document - not valid for payment.) Tj
+/F1 10 Tf
+0 -64 Td
+() Tj
+/F1 12 Tf
+0 -84 Td
+(Vendor: Rising Sun Trading) Tj
+/F1 12 Tf
+0 -106 Td
+(Tax ID: JP-9012345678) Tj
+/F1 12 Tf
+0 -128 Td
+(Invoice No: SI-2026-1122) Tj
+/F1 12 Tf
+0 -150 Td
+(Issue Date: 2026-04-03) Tj
+/F1 12 Tf
+0 -172 Td
+(Due Date: 2026-05-03) Tj
+/F1 12 Tf
+0 -194 Td
+(Currency: JPY) Tj
+/F1 12 Tf
+0 -216 Td
+(Componentes                               28750) Tj
+/F1 12 Tf
+0 -238 Td
+() Tj
+/F1 13 Tf
+0 -260 Td
+(Total JPY                             28750.00) Tj
+ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 9 0 R /F2 10 0 R >> >> /Contents 8 0 R >>
+endobj
+8 0 obj
+<< /Length 612 >>
+stream
+BT
+/F2 16 Tf
+(SYNTHETIC TEST INVOICE - C009C) Tj
+/F1 10 Tf
+0 -44 Td
+(This is a synthetic test document - not valid for payment.) Tj
+/F1 10 Tf
+0 -64 Td
+() Tj
+/F1 12 Tf
+0 -84 Td
+(Vendor: Britannia Logistics) Tj
+/F1 12 Tf
+0 -106 Td
+(Tax ID: GB-987654321) Tj
+/F1 12 Tf
+0 -128 Td
+(Invoice No: INV-GBP-0033) Tj
+/F1 12 Tf
+0 -150 Td
+(Issue Date: 2026-04-04) Tj
+/F1 12 Tf
+0 -172 Td
+(Due Date: 2026-05-04) Tj
+/F1 12 Tf
+0 -194 Td
+(Currency: GBP) Tj
+/F1 12 Tf
+0 -216 Td
+(Freight                                    215.75) Tj
+/F1 12 Tf
+0 -238 Td
+() Tj
+/F1 13 Tf
+0 -260 Td
+(Total GBP                              215.75) Tj
+ET
+endstream
+endobj
+9 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+10 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>
+endobj
+xref
+0 11
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000127 00000 n 
+0000000264 00000 n 
+0000000926 00000 n 
+0000001063 00000 n 
+0000001725 00000 n 
+0000001862 00000 n 
+0000002525 00000 n 
+0000002595 00000 n 
+trailer
+<< /Size 11 /Root 1 0 R >>
+startxref
+2671
+%%EOF

@@ -1,0 +1,348 @@
+<pb-folio [seq]="3" label="Workspace · Upload Invoice" />
+
+<header class="pb-page-head">
+  <h1 class="pb-page-title">Upload Invoice</h1>
+  <p class="pb-page-lede">
+    Extract invoice details from a PDF or image using AI. Review and correct
+    the extracted values, then confirm to create the invoice.
+  </p>
+</header>
+
+<!-- ── Idle: drop zone ── -->
+@if (state() === 'idle') {
+  <div class="pb-upload-zone" role="button" tabindex="0" (click)="openFileDialog()" (keydown.enter)="openFileDialog()" (keydown.space)="$event.preventDefault(); openFileDialog()" [class.drag-over]="dragOver()" (dragover)="onDragOver($event)" (dragleave)="onDragLeave()" (drop)="onDrop($event)">
+    <svg class="pb-upload-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="17 8 12 3 7 8" />
+      <line x1="12" y1="3" x2="12" y2="15" />
+    </svg>
+    <p class="pb-upload-title">Drop your invoice here</p>
+    <p class="pb-upload-subtitle">or click to select (PDF, JPEG, PNG — max 10 MB)</p>
+    <input
+      id="pb_file_input"
+      type="file"
+      accept=".pdf,.jpg,.jpeg,.png"
+      #fileInput
+      (change)="onFileSelected($event)"
+      aria-label="Upload invoice file"
+      style="position:absolute; left:-9999px; width:1px; height:1px; opacity:0;"
+    />
+
+    <label for="pb_file_input" class="pb-btn pb-btn--primary" (click)="stopFileDialog($event)">
+      Select file
+    </label>
+    <div class="pb-file-input-fallback">
+      If the button does not open it, use the browser control: <em>Browse...</em>
+    </div>
+  </div>
+}
+
+<!-- ── Error (idle or after extraction) ── -->
+@if ((state() === 'idle' || state() === 'error') && clientError()) {
+  <div class="pb-error-banner">
+    <svg class="pb-error-icon" viewBox="0 0 24 24" fill="currentColor">
+      <circle cx="12" cy="12" r="10" />
+      <line x1="12" y1="8" x2="12" y2="12" />
+      <line x1="12" y1="16" x2="12.01" y2="16" />
+    </svg>
+    <p>{{ clientError() }}</p>
+  </div>
+}
+
+<!-- ── Selected: show file name + extract button ── -->
+@if (state() === 'selected') {
+  <div class="pb-selected-file">
+    <div class="pb-file-info">
+      <svg class="pb-file-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
+        <polyline points="13 2 13 9 20 9" />
+      </svg>
+      <div class="pb-file-text">
+        <p class="pb-file-name">{{ selectedFile()?.name }}</p>
+        <p class="pb-file-size">{{ selectedFileType() }} · {{ formattedSize() }}</p>
+      </div>
+    </div>
+    <div class="pb-file-actions">
+      <button
+        type="button"
+        class="pb-btn pb-btn--primary"
+        (click)="extract()"
+        [disabled]="!canExtract()"
+      >
+        Extract fields
+      </button>
+      @if (extractDisabledReason() && !canExtract()) {
+        <div class="pb-extract-hint">{{ extractDisabledReason() }}</div>
+      }
+      <button
+        type="button"
+        class="pb-btn pb-btn--ghost"
+        (click)="reset()"
+      >
+        Choose another
+      </button>
+    </div>
+
+    @if (previewUrl()) {
+      <div class="pb-preview-section pb-preview-section--compact">
+        <p class="pb-preview-label">Document preview</p>
+        @if (selectedFile()?.name.toLowerCase().endsWith('.pdf')) {
+          <iframe
+            [src]="sanitizer.bypassSecurityTrustResourceUrl(previewUrl())"
+            class="pb-pdf-preview"
+          ></iframe>
+        } @else {
+          <img [src]="previewUrl()" alt="Invoice preview" class="pb-image-preview" />
+        }
+      </div>
+    }
+  </div>
+}
+
+<!-- ── Processing: spinner + status ── -->
+@if (state() === 'processing') {
+  <div class="pb-processing">
+    <div class="pb-spinner"></div>
+    <p class="pb-processing-text">Extracting invoice details...</p>
+  </div>
+}
+
+<!-- ── Error (during extraction or submission) ── -->
+@if (state() === 'error' && serverError()) {
+  <div class="pb-error-banner pb-error-large">
+    <svg class="pb-error-icon" viewBox="0 0 24 24" fill="currentColor">
+      <circle cx="12" cy="12" r="10" />
+      <line x1="12" y1="8" x2="12" y2="12" />
+      <line x1="12" y1="16" x2="12.01" y2="16" />
+    </svg>
+    <p>{{ serverError() }}</p>
+  </div>
+  <div class="pb-error-actions">
+    <button
+      type="button"
+      class="pb-btn pb-btn--ghost"
+      (click)="reset()"
+    >
+      Try another file
+    </button>
+  </div>
+}
+
+<!-- ── Review: form with extracted fields ── -->
+@if (state() === 'review') {
+  <div class="pb-verification-banner">
+    <svg class="pb-info-icon" viewBox="0 0 24 24" fill="currentColor">
+      <circle cx="12" cy="12" r="10" />
+      <line x1="12" y1="16" x2="12" y2="12" />
+      <line x1="12" y1="8" x2="12.01" y2="8" />
+    </svg>
+    <p>Verification not configured. Review extracted fields before confirming.</p>
+  </div>
+
+  @if (previewUrl()) {
+    <div class="pb-preview-section">
+      <p class="pb-preview-label">Document preview</p>
+      @if (selectedFile()?.name.toLowerCase().endsWith('.pdf')) {
+        <iframe
+          [src]="sanitizer.bypassSecurityTrustResourceUrl(previewUrl())"
+          class="pb-pdf-preview"
+        ></iframe>
+      } @else {
+        <img [src]="previewUrl()" alt="Invoice preview" class="pb-image-preview" />
+      }
+    </div>
+  }
+
+  <form [formGroup]="form" class="pb-review-form">
+    <!-- Invoice number -->
+    <div class="pb-form-group">
+      <label for="invoice_number" class="pb-label">
+        Invoice number
+        <span class="pb-confidence-badge" [ngClass]="'pb-conf-' + fieldConf('invoice_number')">
+          {{ fieldConf('invoice_number') }}
+        </span>
+      </label>
+      <input
+        id="invoice_number"
+        type="text"
+        formControlName="invoice_number"
+        class="pb-input"
+        placeholder="e.g. INV-2024-001"
+      />
+      @if (fieldErrors('invoice_number').length > 0) {
+        <p class="pb-error-text">{{ fieldErrors('invoice_number')[0] }}</p>
+      }
+    </div>
+
+    <!-- Vendor (dropdown) -->
+    <div class="pb-form-group">
+      <label for="vendor" class="pb-label">
+        Vendor <span class="pb-required">*</span>
+      </label>
+      @if (vendorsLoading()) {
+        <p class="pb-loading-text">Loading vendors...</p>
+      } @else {
+        <select id="vendor" formControlName="vendor" class="pb-select">
+          <option value="" disabled>Select a vendor</option>
+          @for (v of vendors(); track v.id) {
+            <option [value]="v.id">{{ v.legal_name }}{{ v.tax_id ? ' (' + v.tax_id + ')' : '' }}</option>
+          }
+        </select>
+      }
+    </div>
+
+    <!-- Issue date -->
+    <div class="pb-form-group">
+      <label for="issue_date" class="pb-label">
+        Issue date
+        <span class="pb-confidence-badge" [ngClass]="'pb-conf-' + fieldConf('issue_date')">
+          {{ fieldConf('issue_date') }}
+        </span>
+      </label>
+      <input
+        id="issue_date"
+        type="date"
+        formControlName="issue_date"
+        class="pb-input"
+      />
+      @if (fieldErrors('issue_date').length > 0) {
+        <p class="pb-error-text">{{ fieldErrors('issue_date')[0] }}</p>
+      }
+    </div>
+
+    <!-- Due date -->
+    <div class="pb-form-group">
+      <label for="due_date" class="pb-label">Due date</label>
+      <input
+        id="due_date"
+        type="date"
+        formControlName="due_date"
+        class="pb-input"
+      />
+    </div>
+
+    <!-- Amount -->
+    <div class="pb-form-group">
+      <label for="amount" class="pb-label">
+        Amount
+        <span class="pb-confidence-badge" [ngClass]="'pb-conf-' + fieldConf('amount')">
+          {{ fieldConf('amount') }}
+        </span>
+      </label>
+      <input
+        id="amount"
+        type="text"
+        formControlName="amount"
+        class="pb-input"
+        placeholder="0.00"
+      />
+      @if (fieldErrors('amount').length > 0) {
+        <p class="pb-error-text">{{ fieldErrors('amount')[0] }}</p>
+      }
+    </div>
+
+    <!-- Currency -->
+    <div class="pb-form-group">
+      <label for="currency" class="pb-label">
+        Currency
+        <span class="pb-confidence-badge" [ngClass]="'pb-conf-' + fieldConf('currency')">
+          {{ fieldConf('currency') }}
+        </span>
+      </label>
+      <input
+        id="currency"
+        type="text"
+        formControlName="currency"
+        class="pb-input"
+        placeholder="USD"
+        maxlength="3"
+      />
+      @if (fieldErrors('currency').length > 0) {
+        <p class="pb-error-text">{{ fieldErrors('currency')[0] }}</p>
+      }
+    </div>
+
+    <!-- Description -->
+    <div class="pb-form-group">
+      <label for="description" class="pb-label">Description</label>
+      <textarea
+        id="description"
+        formControlName="description"
+        class="pb-textarea"
+        placeholder="Optional notes about this invoice"
+        rows="3"
+      ></textarea>
+    </div>
+
+    <!-- Form errors -->
+    @if (clientError()) {
+      <div class="pb-error-banner">
+        <svg class="pb-error-icon" viewBox="0 0 24 24" fill="currentColor">
+          <circle cx="12" cy="12" r="10" />
+        </svg>
+        <p>{{ clientError() }}</p>
+      </div>
+    }
+
+    @if (serverError()) {
+      <div class="pb-error-banner pb-error-large">
+        <svg class="pb-error-icon" viewBox="0 0 24 24" fill="currentColor">
+          <circle cx="12" cy="12" r="10" />
+        </svg>
+        <p>{{ serverError() }}</p>
+      </div>
+    }
+
+    <!-- Actions -->
+    <div class="pb-form-actions">
+      <button
+        type="button"
+        class="pb-btn pb-btn--primary"
+        [disabled]="form.invalid || state() === 'submitting'"
+        (click)="submitReview()"
+      >
+        @if (state() === 'submitting') {
+          Creating invoice...
+        } @else {
+          Create invoice
+        }
+      </button>
+      <button
+        type="button"
+        class="pb-btn pb-btn--ghost"
+        [disabled]="state() === 'submitting'"
+        (click)="reset()"
+      >
+        Start over
+      </button>
+    </div>
+  </form>
+}
+
+<!-- ── Done: confirmation ── -->
+@if (state() === 'done') {
+  <div class="pb-done-section">
+    <div class="pb-success-check">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <polyline points="20 6 9 17 4 12" />
+      </svg>
+    </div>
+    <p class="pb-done-title">Invoice created successfully</p>
+    <p class="pb-done-subtitle">
+      Your extracted invoice has been registered. It will now go through the
+      evaluation and approval workflow.
+    </p>
+    <div class="pb-done-actions">
+      <a [routerLink]="['/app/invoices', createdInvoiceId()]" class="pb-btn pb-btn--primary">
+        View invoice
+      </a>
+      <button
+        type="button"
+        class="pb-btn pb-btn--ghost"
+        (click)="reset()"
+      >
+        Upload another
+      </button>
+    </div>
+  </div>
+}

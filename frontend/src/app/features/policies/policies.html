@@ -1,0 +1,239 @@
+<pb-folio [seq]="5" label="Workspace · Policies" />
+
+<header class="pb-page-head">
+  <div class="headerSection" style="display: flex; align-items: center; justify-content: space-between; gap: 1rem;">
+    <div style="flex: 1;">
+      <h1 class="pb-page-title">Policies</h1>
+      <p class="pb-page-lede">
+        Rule versions of <span class="pb-mono">{{ orgName() }}</span>. One
+        active policy drives every evaluation; versions are immutable. Only a
+        FINANCE_ADMIN can create a new version, and the API deactivates the
+        previous one. The engine decides every financial outcome — this page
+        only stores rules.
+      </p>
+    </div>
+    @if (state() === 'ready' && isAdmin()) {
+      <button type="button" class="pb-btn pb-btn--primary" (click)="openCreate()">
+        <pb-icon name="check" /> New policy version
+      </button>
+    }
+  </div>
+</header>
+
+@if (successNote()) {
+  <div class="panel panel--ok" role="status" aria-live="polite">
+    <p class="panel__body">{{ successNote() }}</p>
+  </div>
+}
+
+@if (state() === 'loading') {
+  <div class="panel" aria-live="polite" aria-busy="true">
+    <div class="skeleton" aria-hidden="true">
+      <span class="skeleton__line" style="width: 100%"></span>
+      <span class="skeleton__line" style="width: 64%"></span>
+    </div>
+    <p class="panel__hint">Loading policies…</p>
+  </div>
+} @else if (state() === 'noorganization') {
+  <div class="panel panel--empty">
+    <h2 class="panel__title">No active organization</h2>
+    <p class="panel__body">
+      Your session has no active membership, so there is no organization whose
+      policies could be listed.
+    </p>
+  </div>
+} @else if (state() === 'forbidden') {
+  <div class="panel panel--error" role="alert">
+    <h2 class="panel__title">No permission</h2>
+    <p class="panel__body">
+      Your session does not have access to this organization's policies.
+    </p>
+  </div>
+} @else if (state() === 'error') {
+  <div class="panel panel--error" role="alert">
+    <h2 class="panel__title">Could not load policies</h2>
+    <p class="panel__body">
+      The server did not respond as expected. Check the connection and try
+      again.
+    </p>
+    <button type="button" class="pb-btn pb-btn--ghost" (click)="load()">
+      <pb-icon name="arrowRight" /> Retry
+    </button>
+  </div>
+} @else {
+  @if (actionError()) {
+    <div class="panel panel--error" role="alert">
+      <p class="panel__body">{{ actionError() }}</p>
+    </div>
+  }
+
+  @if (showForm()) {
+    <section class="panel policy-form">
+      <h2 class="panel__title">New policy version</h2>
+      <p class="panel__hint">
+        The new version becomes the active policy; the API deactivates the
+        previous one. All rules are enforced by the backend engine.
+      </p>
+      <form class="policy-form__fields" (ngSubmit)="submit()">
+        <label class="pb-field">
+          <span class="pb-field__label">Allowed currencies</span>
+          <input
+            class="pb-input"
+            name="allowed_currencies"
+            [(ngModel)]="currencies"
+            placeholder="USD, EUR, COP…"
+          />
+          <span class="pb-field__hint">
+            Comma-separated ISO 4217 codes, uppercased by the API. Empty means
+            no currency restriction. Unsupported codes are rejected by the
+            backend.
+          </span>
+        </label>
+
+        <div class="policy-form__row">
+          <label class="pb-field">
+            <span class="pb-field__label">Max amount</span>
+            <input
+              class="pb-input"
+              type="number"
+              step="0.01"
+              min="0"
+              name="max_amount"
+              [(ngModel)]="maxAmount"
+              placeholder="1000.00"
+            />
+            <span class="pb-field__hint">Hard cap; exceeding blocks. Empty = no cap.</span>
+          </label>
+          <label class="pb-field">
+            <span class="pb-field__label">Escalation threshold</span>
+            <input
+              class="pb-input"
+              type="number"
+              step="0.01"
+              min="0"
+              name="escalation_threshold"
+              [(ngModel)]="escalationThreshold"
+              placeholder="500.00"
+            />
+            <span class="pb-field__hint">
+              Above it escalates (if not blocked first). Empty = none.
+            </span>
+          </label>
+        </div>
+
+        <div class="policy-form__checks">
+          <label class="pb-check">
+            <input
+              type="checkbox"
+              name="require_due_date"
+              [(ngModel)]="requireDueDate"
+            />
+            <span>Require due date (missing data escalates)</span>
+          </label>
+          <label class="pb-check">
+            <input
+              type="checkbox"
+              name="require_description"
+              [(ngModel)]="requireDescription"
+            />
+            <span>Require description (missing data escalates)</span>
+          </label>
+        </div>
+
+        @if (formError()) {
+          <p class="pb-error-text" role="alert">{{ formError() }}</p>
+        }
+
+        <div class="policy-form__actions">
+          <button
+            type="submit"
+            class="pb-btn pb-btn--primary"
+            [disabled]="!canSubmit()"
+          >
+            {{ submitting() ? 'Creating…' : 'Create policy version' }}
+          </button>
+          <button type="button" class="pb-btn pb-btn--ghost" (click)="closeCreate()">
+            Cancel
+          </button>
+        </div>
+      </form>
+    </section>
+  }
+
+  @if (policies().length === 0) {
+    <div class="panel panel--empty">
+      <h2 class="panel__title">No policies configured</h2>
+      <p class="panel__body">
+        Without an active policy the engine escalates every invoice
+        (no_active_policy) — nothing is ever approved by default.
+        {{ isAdmin() ? 'Create the first policy version to define your rules.' : '' }}
+      </p>
+    </div>
+  } @else {
+    @if (activePolicy()) {
+      <section class="panel policy-active" aria-labelledby="active-policy-title">
+        <h2 id="active-policy-title" class="panel__title">
+          Active policy · v{{ activePolicy()!.version }}
+        </h2>
+        <dl class="policy-active__grid">
+          <div class="policy-active__item">
+            <dt>Currencies</dt>
+            <dd>{{ currenciesLabel(activePolicy()!) }}</dd>
+          </div>
+          <div class="policy-active__item">
+            <dt>Max amount</dt>
+            <dd class="pb-mono">{{ limitLabel(activePolicy()!.max_amount) }}</dd>
+          </div>
+          <div class="policy-active__item">
+            <dt>Escalation threshold</dt>
+            <dd class="pb-mono">{{ limitLabel(activePolicy()!.escalation_threshold) }}</dd>
+          </div>
+          <div class="policy-active__item">
+            <dt>Required data</dt>
+            <dd>{{ requiresLabel(activePolicy()!) }}</dd>
+          </div>
+          <div class="policy-active__item">
+            <dt>Created</dt>
+            <dd>{{ activePolicy()!.created_at | date: 'mediumDate' }}</dd>
+          </div>
+        </dl>
+      </section>
+    }
+
+    <div class="pb-table-scroll">
+    <table class="pb-table policies">
+      <thead>
+        <tr>
+          <th>Version</th>
+          <th>Status</th>
+          <th>Currencies</th>
+          <th>Max amount</th>
+          <th>Escalation</th>
+          <th>Required data</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (policy of policies(); track policy.id) {
+          <tr>
+            <td class="pb-mono">v{{ policy.version }}</td>
+            <td>
+              <span
+                class="statebadge"
+                [class.statebadge--active]="policy.is_active"
+              >
+                {{ policy.is_active ? 'active' : 'superseded' }}
+              </span>
+            </td>
+            <td>{{ currenciesLabel(policy) }}</td>
+            <td class="pb-mono">{{ limitLabel(policy.max_amount) }}</td>
+            <td class="pb-mono">{{ limitLabel(policy.escalation_threshold) }}</td>
+            <td>{{ requiresLabel(policy) }}</td>
+            <td>{{ policy.created_at | date: 'mediumDate' }}</td>
+          </tr>
+        }
+      </tbody>
+    </table>
+    </div>
+  }
+}

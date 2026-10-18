@@ -1,0 +1,9 @@
+# PayBlood Phase 2 Slice 3 — tasks mirror
+
+- [x] T1 Vendor model + migration
+- [x] T2 Read permission + vendor serializers
+- [x] T3 Vendor views + URLs
+- [x] T4 Vendor admin read-only
+- [x] T5 tests_vendors.py
+- [x] T6 Docs: README + changelog
+- [x] T7 Validation + report

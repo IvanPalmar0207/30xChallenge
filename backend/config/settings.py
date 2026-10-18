@@ -6,6 +6,7 @@ come from the root `.env` file (gitignored); the repository only tracks the
 placeholder template `.env.example`. See implementation-contract.md item 7.
 """
 
+from datetime import timedelta
 from pathlib import Path
 
 import environ
@@ -17,7 +18,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 env = environ.Env(
     DJANGO_DEBUG=(bool, True),
     DJANGO_ALLOWED_HOSTS=(list, ["localhost", "127.0.0.1"]),
-    DJANGO_CORS_ALLOWED_ORIGINS=(list, ["http://localhost:4200"]),
+    DJANGO_CORS_ALLOWED_ORIGINS=(list, ["http://localhost:4200", "http://127.0.0.1:4200", "https://payblood.netlify.app"]),
 )
 environ.Env.read_env(BASE_DIR.parent / ".env")
 
@@ -29,6 +30,10 @@ environ.Env.read_env(BASE_DIR.parent / ".env")
 # placeholder. Generate one with:
 #   python -c "import secrets; print(secrets.token_urlsafe(64))"
 SECRET_KEY = env("DJANGO_SECRET_KEY")
+
+# JWT signing key: separate, robust secret via environment; falls back to the
+# Django secret only for local development. Production must set JWT_SIGNING_KEY.
+JWT_SIGNING_KEY = env("JWT_SIGNING_KEY", default=SECRET_KEY)
 
 # SECURITY WARNING: never enable DEBUG in production. The default is True only
 # to make local development work out of the box.
@@ -50,9 +55,13 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework.authtoken",
     "corsheaders",
+    # JWT auth with refresh blacklist (access 10m, refresh 7d, rotation)
+    "rest_framework_simplejwt",
+    "rest_framework_simplejwt.token_blacklist",
     # PayBlood domain apps (under backend/apps/)
     "apps.organizations",
     "apps.accounts",
+    "apps.extraction",   # Slice 7 — AI invoice extraction
 ]
 
 MIDDLEWARE = [
@@ -94,6 +103,11 @@ WSGI_APPLICATION = "config.wsgi.application"
 # DATABASE_URL=postgres://user:password@host:5432/name in `.env`; credentials
 # never appear in code. psycopg is pinned so the switch needs no new install.
 DATABASES = {"default": env.db_url("DATABASE_URL", default="sqlite:///db.sqlite3")}
+
+# Local SQLite: wait for the lock instead of failing fast when the dev server
+# fires concurrent requests (avoids spurious "database is locked" on login/refresh).
+if DATABASES["default"]["ENGINE"] == "django.db.backends.sqlite3":
+    DATABASES["default"].setdefault("OPTIONS", {})["timeout"] = 20
 
 # ---------------------------------------------------------------------------
 # Password validation (Django defaults)
@@ -142,8 +156,7 @@ REST_FRAMEWORK = {
     # admin. Login/token issuance is not implemented yet (planned slice); this
     # slice only verifies the tenant-scoped endpoints.
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework.authentication.TokenAuthentication",
-        "rest_framework.authentication.SessionAuthentication",
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
     ],
     # Fail closed by default: every DRF view requires an authenticated user
     # unless a view declares otherwise.
@@ -159,23 +172,56 @@ REST_FRAMEWORK = {
     },
 }
 
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=10),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+    "SIGNING_KEY": JWT_SIGNING_KEY,
+    "ALGORITHM": "HS256",
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "UPDATE_LAST_LOGIN": False,
+}
+
 # ---------------------------------------------------------------------------
 # CORS (django-cors-headers)
 # ---------------------------------------------------------------------------
 # Browser origins allowed to call the API. The Angular dev server is the
 # default; tighten for production (the API is not meant to be public).
 CORS_ALLOWED_ORIGINS = env("DJANGO_CORS_ALLOWED_ORIGINS")
+# Credentials (HttpOnly refresh cookie) are allowed only toward the explicit
+# origins above — never a wildcard with credentials.
+CORS_ALLOW_CREDENTIALS = True
+
+# Refresh-token cookie: HttpOnly transport for the SPA (JS never reads it).
+# SameSite=None + Secure is required for dev cross-site (localhost:4200 ->
+# localhost:8000); production must serve the backend over HTTPS.
+REFRESH_COOKIE_NAME = "pb_refresh"
+REFRESH_COOKIE_SECURE = env.bool("REFRESH_COOKIE_SECURE", default=True)
+REFRESH_COOKIE_SAMESITE = env("REFRESH_COOKIE_SAMESITE", default="None")
 
 # ---------------------------------------------------------------------------
 # AI extraction configuration (reserved for a later phase; not used yet)
 # ---------------------------------------------------------------------------
 # INVARIANT (implementation-contract.md items 1 and 3): the AI only extracts
 # and structures invoice data; it never approves invoices and never makes
-# financial decisions. The API key is read from the environment at runtime and
-# must never be committed or shipped to the frontend.
+# financial decisions. Provider credentials are read from the environment at
+# runtime and must never be committed or shipped to the frontend.
 AI_PROVIDER = env("AI_PROVIDER", default="")
 AI_MODEL = env("AI_MODEL", default="")
 AI_API_KEY = env("AI_API_KEY", default="")
+OPENROUTER_API_KEY = env("OPENROUTER_API_KEY", default="")
+OPENROUTER_MODEL = env("OPENROUTER_MODEL", default="")
+# Mock scenario for tests: 'success' | 'partial' | 'error' | 'timeout' | 'malformed'
+AI_MOCK_SCENARIO = env("AI_MOCK_SCENARIO", default="success")
+
+# ── Extraction (Slice 7) ──────────────────────────────────────────────────────
+# Max upload file size in MB (server-side enforcement; default 10 MB).
+EXTRACTION_MAX_FILE_SIZE_MB   = env.int("EXTRACTION_MAX_FILE_SIZE_MB",   default=10)
+# Max PDF pages to process per document.
+EXTRACTION_MAX_PDF_PAGES      = env.int("EXTRACTION_MAX_PDF_PAGES",      default=10)
+# Timeout (seconds) for AI provider API calls.
+EXTRACTION_AI_TIMEOUT_SECONDS = env.int("EXTRACTION_AI_TIMEOUT_SECONDS", default=60)
 
 # Default primary key field type.
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

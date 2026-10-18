@@ -22,5 +22,6 @@ urlpatterns = [
     # PayBlood API (versioned; DRF). The router registers its own
     # "organizations" prefix, so the include lives at "api/v1/".
     path("api/v1/", include("apps.organizations.urls")),
+    path("api/v1/", include("apps.extraction.urls")),    # Slice 7 — invoice extraction
     path("api/v1/auth/", include("apps.accounts.urls")),
 ]

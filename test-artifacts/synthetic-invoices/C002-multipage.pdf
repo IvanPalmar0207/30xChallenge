@@ -1,0 +1,98 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R /F2 8 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 535 >>
+stream
+BT
+/F2 16 Tf
+(SYNTHETIC TEST INVOICE - C002 \(page 1 of 2\)) Tj
+/F1 10 Tf
+0 -44 Td
+(This is a synthetic test document - not valid for payment.) Tj
+/F1 10 Tf
+0 -64 Td
+() Tj
+/F1 12 Tf
+0 -84 Td
+(Vendor: Northwind Trading GmbH) Tj
+/F1 12 Tf
+0 -106 Td
+(Tax ID: DE-123456789) Tj
+/F1 12 Tf
+0 -128 Td
+(Invoice No: INV-EUR-2026-42) Tj
+/F1 12 Tf
+0 -150 Td
+(Issue Date: 2026-09-01) Tj
+/F1 12 Tf
+0 -172 Td
+(Due Date: 2026-09-30) Tj
+/F1 12 Tf
+0 -194 Td
+(Currency: EUR) Tj
+/F1 12 Tf
+0 -216 Td
+(Line item 1 - consulting                  400.00) Tj
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 7 0 R /F2 8 0 R >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 422 >>
+stream
+BT
+/F2 16 Tf
+(SYNTHETIC TEST INVOICE - C002 \(page 2 of 2\)) Tj
+/F1 10 Tf
+0 -44 Td
+(This is a synthetic test document - not valid for payment.) Tj
+/F1 10 Tf
+0 -64 Td
+() Tj
+/F1 12 Tf
+0 -84 Td
+(Line item 2 - training                     200.00) Tj
+/F1 12 Tf
+0 -106 Td
+(Line item 3 - support                      100.00) Tj
+/F1 12 Tf
+0 -128 Td
+() Tj
+/F1 13 Tf
+0 -150 Td
+(Total EUR                                700.00) Tj
+ET
+endstream
+endobj
+7 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+8 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>
+endobj
+xref
+0 9
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000121 00000 n 
+0000000257 00000 n 
+0000000843 00000 n 
+0000000979 00000 n 
+0000001452 00000 n 
+0000001522 00000 n 
+trailer
+<< /Size 9 /Root 1 0 R >>
+startxref
+1597
+%%EOF

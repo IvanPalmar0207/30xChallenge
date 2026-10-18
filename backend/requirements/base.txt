@@ -5,6 +5,8 @@ djangorestframework==3.18.3
 django-cors-headers==4.9.0
 django-environ==0.14.0
 
+djangorestframework-simplejwt==5.5.0
+
 # PostgreSQL driver — kept from day one so DATABASE_URL can switch to
 # postgres:// without a new install. SQLite remains the local default.
 psycopg[binary]==3.3.6

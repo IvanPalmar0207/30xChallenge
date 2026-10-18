@@ -5,13 +5,14 @@ from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
 from .models import (
+    Invoice,
+    InvoiceApproval,
     Organization,
     OrganizationMembership,
     OrganizationRole,
-    Vendor,
-    Invoice,
     Policy,
     PolicyDecision,
+    Vendor,
 )
 
 User = get_user_model()
@@ -380,9 +381,16 @@ class InvoiceCreateSerializer(serializers.Serializer):
             )
         return attrs
 
-    def create(self, validated_data):
+    def create(self, validated_data, **kwargs):
+        # DRF merges save() kwargs (organization, created_by) into
+        # validated_data; created_by is server-set and never client-writable.
+        created_by = validated_data.pop("created_by", kwargs.get("created_by"))
         organization = validated_data.pop("organization")
-        return Invoice.objects.create(**validated_data, organization=organization)
+        return Invoice.objects.create(
+            **validated_data,
+            organization=organization,
+            created_by=created_by,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -408,6 +416,23 @@ class PolicySerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = fields
+
+
+
+class InvoiceApprovalSerializer(serializers.ModelSerializer):
+    """Writable human decision on an invoice. Whitelist: only `decision`
+    (approved|rejected) and an optional `rationale`. Actor, organization,
+    invoice, timestamps and audit fields are read-only / server-set."""
+
+    class Meta:
+        model = InvoiceApproval
+        fields = ["id", "invoice", "organization", "decision", "decided_by", "rationale", "created_at"]
+        read_only_fields = ["id", "invoice", "organization", "decided_by", "created_at"]
+
+    def validate_decision(self, value):
+        if value not in (InvoiceApproval.Decision.APPROVED, InvoiceApproval.Decision.REJECTED):
+            raise serializers.ValidationError("Decision must be 'approved' or 'rejected'.")
+        return value
 
 
 class PolicyCreateSerializer(serializers.Serializer):
@@ -503,4 +528,85 @@ class PolicyDecisionSerializer(serializers.ModelSerializer):
             "evaluated_by",
             "created_at",
         ]
+        read_only_fields = fields
+
+
+# ---------------------------------------------------------------------------
+# Global organization administration (final slice)
+# ---------------------------------------------------------------------------
+# These serializers back the SUPERADMIN-ONLY global surface. Membership
+# creation never exposes writable global flags: only `name` and `admin_email`
+# are accepted on create, and only `name`/`status` on update. The client can
+# never set is_superuser, is_staff, permissions, or arbitrary roles.
+
+
+class GlobalOrganizationCreateSerializer(serializers.Serializer):
+    """Create an organization atomically with its initial FINANCE_ADMIN.
+
+    The initial administrator is identified by email. If the account already
+    exists it is reused untouched (password and privileges preserved); if it
+    does not, the view creates it with an unusable password and issues a
+    one-time setup token, following the existing account-lifecycle flow. The
+    role is fixed to FINANCE_ADMIN and is never client-selectable.
+    """
+
+    name = serializers.CharField(max_length=200)
+    admin_email = serializers.EmailField()
+
+    def validate_name(self, value):
+        name = value.strip()
+        if not name:
+            raise serializers.ValidationError(
+                "Organization name must not be blank."
+            )
+        if Organization.objects.filter(name=name).exists():
+            raise serializers.ValidationError(
+                "An organization with this name already exists."
+            )
+        return name
+
+    def validate_admin_email(self, value):
+        email = value.strip().lower()
+        if len(email) > 150:
+            raise serializers.ValidationError(
+                "Email must be at most 150 characters."
+            )
+        return email
+
+
+class GlobalOrganizationUpdateSerializer(serializers.ModelSerializer):
+    """Update the administrative fields the model allows: name and status.
+
+    The tenant ownership of vendors, invoices, policies, and memberships is
+    immutable through this surface: no relational field is writable, and the
+    unique name constraint is enforced by the model validation.
+    """
+
+    class Meta:
+        model = Organization
+        fields = ["name", "status"]
+
+    def validate_name(self, value):
+        name = value.strip()
+        if not name:
+            raise serializers.ValidationError(
+                "Organization name must not be blank."
+            )
+        if Organization.objects.filter(name=name).exclude(pk=self.instance.pk).exists():
+            raise serializers.ValidationError(
+                "An organization with this name already exists."
+            )
+        return name
+
+
+class GlobalUserCandidateSerializer(serializers.ModelSerializer):
+    """Minimal, safe user reference for the initial-admin picker.
+
+    Only identity fields are exposed — never passwords, hashes, tokens,
+    memberships, or global privilege flags.
+    """
+
+    class Meta:
+        model = User
+        fields = ["id", "username", "email"]
         read_only_fields = fields

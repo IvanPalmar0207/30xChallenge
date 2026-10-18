@@ -2,20 +2,27 @@
 setup via one-time invitation tokens."""
 
 import hashlib
+from datetime import UTC, datetime as dtlib
 
-from django.contrib.auth import authenticate, logout
+from django.conf import settings as dj_settings
+from django.contrib.auth import authenticate, get_user_model, logout
 from django.db import transaction
 from django.utils import timezone
 from rest_framework import status
-from rest_framework.authtoken.models import Token
 from rest_framework.exceptions import AuthenticationFailed, ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
+from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.token_blacklist.models import (
+    BlacklistedToken,
+    OutstandingToken,
+)
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.organizations.models import AuditEvent, PasswordSetupToken
-from apps.organizations.views import _audit
+from apps.organizations.audit import _audit
 
 from .serializers import (
     LoginSerializer,
@@ -24,6 +31,91 @@ from .serializers import (
     UserPublicSerializer,
 )
 
+
+
+
+def _set_refresh_cookie(response, raw_refresh: str) -> None:
+    """Store the refresh token in an HttpOnly cookie (JS never reads it)."""
+    response.set_cookie(
+        dj_settings.REFRESH_COOKIE_NAME,
+        raw_refresh,
+        max_age=7 * 24 * 60 * 60,  # matches REFRESH_TOKEN_LIFETIME (7 days)
+        httponly=True,
+        secure=dj_settings.REFRESH_COOKIE_SECURE,
+        samesite=dj_settings.REFRESH_COOKIE_SAMESITE,
+        path="/api/v1/auth/",
+    )
+
+
+def _read_refresh(request) -> str | None:
+    """Prefer the JSON body (legacy) and fall back to the HttpOnly cookie."""
+    body = request.data.get("refresh")
+    if isinstance(body, str) and body:
+        return body
+    return request.COOKIES.get(dj_settings.REFRESH_COOKIE_NAME)
+
+
+class HashedRefreshToken(RefreshToken):
+    """RefreshToken whose emission does NOT auto-store the raw token in the
+    blacklist table (SimpleJWT's RefreshToken.for_user writes the plaintext
+    JWT to OutstandingToken — see its classmethod). We register hashes
+    explicitly in _record_outstanding."""
+
+    @classmethod
+    def for_user(cls, user):
+        # Deliberately call the BASE Token.for_user (no outstanding write).
+        # pylint: disable=no-member
+        return super(RefreshToken, cls).for_user(user)
+
+
+def _hash_token(raw: str) -> str:
+    """Never store refresh tokens in clear text: only a SHA-256 hash is kept."""
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _record_outstanding(refresh: RefreshToken) -> None:
+    """Register a JWT refresh so it can be blacklisted later (hashed token)."""
+    user_id = refresh.payload.get("user_id")
+    user = None
+    if user_id is not None:
+        try:
+            user = get_user_model().objects.get(pk=user_id)
+        except get_user_model().DoesNotExist:
+            user = None
+    exp = refresh.payload.get("exp")
+    # update_or_create: if the library ever stored the raw JWT for this jti
+    # (SimpleJWT's RefreshToken.for_user does), converge it to the hash.
+    OutstandingToken.objects.update_or_create(
+        jti=refresh.payload["jti"],
+        defaults={
+            "user": user,
+            "created_at": timezone.now(),
+            "expires_at": dtlib.fromtimestamp(exp, tz=UTC)
+            if exp
+            else timezone.now(),
+            "token": _hash_token(str(refresh)),
+        },
+    )
+
+
+def _blacklist_refresh(raw: str) -> None:
+    """Validate the presented refresh and revoke it (by jti, hashed record).
+
+    Raises TokenError for invalid, expired, or already-blacklisted tokens.
+    """
+    refresh = RefreshToken(raw)  # verify() checks signature, expiry and blacklist
+    outstanding, _ = OutstandingToken.objects.update_or_create(
+        jti=refresh.payload["jti"],
+        defaults={
+            "user": None,
+            "created_at": timezone.now(),
+            "expires_at": dtlib.fromtimestamp(
+                refresh.payload["exp"], tz=UTC
+            ),
+            "token": _hash_token(raw),
+        },
+    )
+    BlacklistedToken.objects.get_or_create(token=outstanding)
 
 class LoginRateThrottle(AnonRateThrottle):
     """Anonymous throttle for the login and set-password endpoints.
@@ -68,29 +160,98 @@ class LoginView(APIView):
         user = authenticate(request, username=email, password=password)
         if user is None:
             raise AuthenticationFailed("Invalid email or password.")
-        token, _ = Token.objects.get_or_create(user=user)
-        return Response(
-            {"token": token.key, "user": UserPublicSerializer(user).data}
+        refresh = HashedRefreshToken.for_user(user)
+        _record_outstanding(refresh)
+        response = Response(
+            {
+                "access": str(refresh.access_token),
+                "refresh": str(refresh),
+                "user": UserPublicSerializer(user).data,
+            }
         )
+        _set_refresh_cookie(response, str(refresh))
+        return response
+
+
+class RefreshView(APIView):
+    """POST /api/v1/auth/refresh/ — mint a new access token (and, under
+    rotation, a new refresh) from a valid refresh token.
+
+    The presented refresh is blacklisted after rotation; reuse answers 401.
+    Expired, invalid, or blacklisted refresh tokens answer the same 401 with
+    no internal detail. Refresh tokens are never stored in clear text.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        raw = _read_refresh(request)
+        if not raw:
+            return Response(
+                {"detail": "A refresh token is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            token = RefreshToken(raw)
+        except (TokenError, KeyError):
+            return Response(
+                {"detail": "Token is invalid or expired."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+        user_id = token.payload.get("user_id")
+        user = None
+        if user_id is not None:
+            try:
+                user = get_user_model().objects.get(pk=user_id)
+            except get_user_model().DoesNotExist:
+                user = None
+        if user is None or not user.is_active:
+            return Response(
+                {"detail": "Token is invalid or expired."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        data = {"access": str(token.access_token)}
+
+        if getattr(dj_settings, "SIMPLE_JWT", {}).get("ROTATE_REFRESH_TOKENS", True):
+            _blacklist_refresh(raw)  # revoke the presented refresh (hashed)
+            new_refresh = HashedRefreshToken.for_user(user)
+            _record_outstanding(new_refresh)
+            data["refresh"] = str(new_refresh)
+
+        response = Response(data, status=status.HTTP_200_OK)
+        _set_refresh_cookie(response, str(new_refresh))
+        return response
 
 
 class LogoutView(APIView):
-    """POST /api/v1/auth/logout/ — revoke the current token.
+    """POST /api/v1/auth/logout/ — revoke the presented refresh token.
 
-    DRF tokens do not expire automatically (documented limitation); logout is
-    the explicit revocation path. For session-authenticated requests the
-    session is flushed instead. A revoked token answers 401 on its next use.
+    With JWT the access token is short-lived (10 minutes); revocation is
+    enforced on the refresh token, which is what can mint new access tokens.
+    A revoked refresh answers 401 on its next use. Session-authenticated
+    requests flush the session instead.
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
     def post(self, request):
-        auth = request.auth
-        if auth is not None and hasattr(auth, "key"):
-            Token.objects.filter(key=auth.key).delete()
-        else:
+        raw = _read_refresh(request)
+        if raw:
+            try:
+                _blacklist_refresh(raw)
+            except (TokenError, KeyError, ValueError):
+                raise ValidationError("Invalid or expired refresh token.")
+            response = Response(status=status.HTTP_204_NO_CONTENT)
+            response.delete_cookie(
+                dj_settings.REFRESH_COOKIE_NAME, path="/api/v1/auth/"
+            )
+            return response
+        # Backward-compatible session flush for non-JWT callers.
+        if request.user.is_authenticated:
             logout(request)
-        return Response(status=status.HTTP_204_NO_CONTENT)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        raise ValidationError("A refresh token is required.")
 
 
 class SetPasswordView(APIView):
@@ -118,6 +279,7 @@ class SetPasswordView(APIView):
                 token_hash=token_hash,
                 used_at__isnull=True,
                 expires_at__gt=timezone.now(),
+                user__is_active=True,
             )
             .select_related("user")
             .first()

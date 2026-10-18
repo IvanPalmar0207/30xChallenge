@@ -15,7 +15,7 @@ from unittest import mock
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError
 from django.test import TestCase
-from rest_framework.authtoken.models import Token
+from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.test import APIClient
 
 from .models import (
@@ -33,8 +33,9 @@ User = get_user_model()
 
 
 def auth(client, user):
-    token, _ = Token.objects.get_or_create(user=user)
-    client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+    """Authenticate through the real JWT pipeline."""
+    access = RefreshToken.for_user(user).access_token
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
     return client
 
 
@@ -350,7 +351,9 @@ class PolicyEngineTests(TestCase):
         self.assertEqual(response.data["result"], PolicyDecision.Result.ESCALATED)
         self.assertEqual(response.data["reason_code"], "no_active_policy")
         self.inv_received.refresh_from_db()
-        self.assertEqual(self.inv_received.status, Invoice.Status.ESCALATED)
+        # Engine decision stays 'escalated'; the invoice enters the human
+        # approval workflow as pending_approval.
+        self.assertEqual(self.inv_received.status, Invoice.Status.PENDING_APPROVAL)
 
     def test_evaluate_precedence_blocked_before_escalated(self):
         # amount > max_amount AND > escalation_threshold -> blocked, not escalated.
@@ -383,6 +386,64 @@ class PolicyEngineTests(TestCase):
         response = self.client.post(self.url_evaluate(self.org_a.id, invoice.id))
         self.assertEqual(response.data["result"], PolicyDecision.Result.APPROVED)
 
+    def test_evaluate_amount_equal_to_escalation_threshold_is_approved(self):
+        # amount == escalation_threshold is NOT escalated (strict >), so a
+        # compliant invoice at exactly the threshold is approved.
+        self._create_policy(
+            self.org_a, max_amount="1000.00", escalation_threshold="500.00"
+        )
+        invoice = Invoice.objects.create(
+            organization=self.org_a,
+            vendor=self.v_active,
+            invoice_number="INV-308",
+            issue_date="2026-10-01",
+            amount="500.00",
+            currency="USD",
+        )
+        auth(self.client, self.admin_a)
+        response = self.client.post(self.url_evaluate(self.org_a.id, invoice.id))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["result"], PolicyDecision.Result.APPROVED)
+        self.assertEqual(response.data["reason_code"], "policy_ok")
+
+    def test_evaluate_threshold_equal_to_max_amount_equal_amount_is_approved(
+        self,
+    ):
+        # escalation_threshold == max_amount and amount == max_amount: neither
+        # strict comparison fires, so the invoice is approved — "exceeds the
+        # maximum" only ever blocks when the maximum is really exceeded.
+        self._create_policy(
+            self.org_a, max_amount="100.00", escalation_threshold="100.00"
+        )
+        invoice = Invoice.objects.create(
+            organization=self.org_a,
+            vendor=self.v_active,
+            invoice_number="INV-309",
+            issue_date="2026-10-01",
+            amount="100.00",
+            currency="USD",
+        )
+        auth(self.client, self.admin_a)
+        response = self.client.post(self.url_evaluate(self.org_a.id, invoice.id))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["result"], PolicyDecision.Result.APPROVED)
+        self.assertEqual(response.data["reason_code"], "policy_ok")
+        # Contrast under the same policy: the smallest excess blocks.
+        invoice_above = Invoice.objects.create(
+            organization=self.org_a,
+            vendor=self.v_active,
+            invoice_number="INV-310",
+            issue_date="2026-10-01",
+            amount="100.01",
+            currency="USD",
+        )
+        response = self.client.post(
+            self.url_evaluate(self.org_a.id, invoice_above.id)
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["result"], PolicyDecision.Result.BLOCKED)
+        self.assertEqual(response.data["reason_code"], "amount_exceeds_max")
+
     def test_evaluate_empty_currencies_means_no_restriction(self):
         self._create_policy(self.org_a, allowed_currencies=[])
         invoice = Invoice.objects.create(
@@ -410,7 +471,8 @@ class PolicyEngineTests(TestCase):
                 self.url_evaluate(self.org_a.id, self.inv_received.id)
             )
         self.assertEqual(response.status_code, 500)
-        self.assertNotIn("boom", str(response.data))
+        # Exact fail-safe body: no traceback, no internal detail, no extras.
+        self.assertEqual(response.data, {"detail": "Internal server error."})
         self.inv_received.refresh_from_db()
         self.assertEqual(self.inv_received.status, Invoice.Status.RECEIVED)
         self.assertFalse(
@@ -442,6 +504,21 @@ class PolicyEngineTests(TestCase):
             self.client.post(self.url_evaluate(self.org_a.id, self.inv_received.id)).status_code,
             404,
         )
+
+    def test_uniform_404_detail_for_foreign_and_unknown_organization(self):
+        # A non-member sees the same public 404 body for an organization that
+        # does not exist and for an existing organization it cannot access
+        # (HidingByNotExisting: no existence disclosure via error text).
+        self._create_policy(self.org_a)
+        auth(self.client, self.admin_b)  # FINANCE_ADMIN of org_b, not org_a
+        unknown_org = self.client.get(
+            f"/api/v1/organizations/{uuid.uuid4()}/policies/"
+        )
+        foreign_org = self.client.get(self.url_policies(self.org_a.id))
+        self.assertEqual(unknown_org.status_code, 404)
+        self.assertEqual(foreign_org.status_code, 404)
+        self.assertEqual(unknown_org.data, foreign_org.data)
+        self.assertEqual(unknown_org.data, {"detail": "Organization not found."})
 
     def test_evaluate_roles_operator_triggers_engine_decides(self):
         self._create_policy(self.org_a)
@@ -520,6 +597,34 @@ class PolicyEngineTests(TestCase):
         self.assertEqual(decision.rules_snapshot["version"], 1)
         self.assertEqual(decision.rules_snapshot["max_amount"], "1000.00")
         self.assertEqual(decision.rules_snapshot["allowed_currencies"], ["USD"])
+
+    def test_decision_snapshot_unchanged_after_new_policy_version(self):
+        # A recorded decision is immutable: creating policy v2 never alters
+        # the id, version, or rules snapshot pinned from v1.
+        policy_v1 = self._create_policy(self.org_a, max_amount="1000.00")
+        auth(self.client, self.admin_a)
+        self.client.post(self.url_evaluate(self.org_a.id, self.inv_received.id))
+        decision = PolicyDecision.objects.get(invoice=self.inv_received)
+        self.client.post(
+            self.url_policies(self.org_a.id),
+            self.policy_payload(max_amount="2000.00"),
+            format="json",
+        )
+        policy_v2 = Policy.objects.get(organization=self.org_a, version=2)
+        self.assertNotEqual(policy_v2.id, policy_v1.id)
+        policy_v1.refresh_from_db()
+        self.assertFalse(policy_v1.is_active)
+        decision.refresh_from_db()
+        self.assertEqual(decision.policy_id, policy_v1.id)
+        self.assertEqual(decision.policy_version, 1)
+        self.assertEqual(decision.rules_snapshot["version"], 1)
+        self.assertEqual(decision.rules_snapshot["max_amount"], "1000.00")
+        self.assertEqual(
+            decision.rules_snapshot["escalation_threshold"], "500.00"
+        )
+        self.assertEqual(decision.rules_snapshot["allowed_currencies"], ["USD"])
+        self.assertFalse(decision.rules_snapshot["require_due_date"])
+        self.assertFalse(decision.rules_snapshot["require_description"])
 
     def test_decision_read_by_any_active_member(self):
         self._create_policy(self.org_a)

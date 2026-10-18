@@ -1,0 +1,20 @@
+# Netlify build configuration — PayBlood frontend
+# The backend (Django) is not deployed here: this site serves the Angular app
+# and its public shell only. API calls reach whatever backend the browser can
+# reach (CORS restrictions apply server-side).
+
+[build]
+  base = "frontend"
+  command = "npm run build"
+  publish = "dist/frontend/browser"
+
+[build.environment]
+  # Production build (tree-shaken, optimized). AOT is the default in Angular.
+  NODE_VERSION = "22"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    X-Frame-Options = "DENY"

@@ -1,0 +1,198 @@
+<pb-folio [seq]="4" label="Administration · Global" />
+
+<header class="pb-page-head">
+  <h1 class="pb-page-title">Global administration</h1>
+  <p class="pb-page-lede">
+    Superuser-only surface: every organization in the platform, created and
+    managed by a global administrator. FINANCE_ADMIN of an organization never
+    grants this — the server re-checks authority on every request.
+  </p>
+</header>
+
+@if (state() === 'loading') {
+  <div class="panel" aria-live="polite" aria-busy="true">
+    <div class="skeleton" aria-hidden="true">
+      <span class="skeleton__line" style="width: 60%"></span>
+      <span class="skeleton__line" style="width: 45%"></span>
+      <span class="skeleton__line" style="width: 80%"></span>
+    </div>
+    <p class="panel__hint">Loading organizations…</p>
+  </div>
+} @else if (state() === 'forbidden') {
+  <div class="panel panel--error" role="alert">
+    <h2 class="panel__title">No permission</h2>
+    <p class="panel__body">
+      This surface is restricted to the global platform administrator.
+    </p>
+  </div>
+} @else if (state() === 'error') {
+  <div class="panel panel--error" role="alert">
+    <h2 class="panel__title">Could not load organizations</h2>
+    <p class="panel__body">
+      The server did not respond as expected. Check the connection and try
+      again.
+    </p>
+    <button type="button" class="pb-btn pb-btn--ghost" (click)="load()">
+      Retry
+    </button>
+  </div>
+} @else {
+  <!-- ── Create organization + initial administrator ─────────────────── -->
+  <section class="panel panel--create" aria-labelledby="create-title">
+    <h2 id="create-title" class="panel__title">Create an organization</h2>
+    <p class="panel__body">
+      The organization and its initial FINANCE_ADMIN commit atomically. If the
+      email matches an existing account it is reused untouched; a brand-new
+      account is created with a one-time setup token, never a default
+      password. Global privilege flags cannot be set from here.
+    </p>
+
+    <form class="pb-review-form" novalidate>
+      <div class="pb-form-group">
+        <label for="org_name" class="pb-label">Organization name</label>
+        <input
+          id="org_name"
+          type="text"
+          class="pb-input"
+          [value]="name()"
+          (input)="setName($event)"
+          placeholder="e.g. Acme Corp"
+          autocomplete="organization"
+        />
+      </div>
+
+      <div class="pb-form-group">
+        <label for="admin_email" class="pb-label">
+          Initial administrator email
+        </label>
+        <input
+          id="admin_email"
+          type="email"
+          class="pb-input"
+          [value]="adminEmail()"
+          (input)="setAdminEmail($event)"
+          placeholder="admin@company.com"
+          autocomplete="email"
+        />
+        @if (candidatesLoading()) {
+          <p class="pb-loading-text">Looking up accounts…</p>
+        } @else if (candidates().length > 0) {
+          <div class="candidates" role="listbox" aria-label="Matching accounts">
+            @for (candidate of candidates(); track candidate.id) {
+              <button
+                type="button"
+                class="candidates__item"
+                role="option"
+                (click)="selectCandidate(candidate)"
+              >
+                <span class="pb-mono">{{ candidate.username }}</span>
+                @if (candidate.email && candidate.email !== candidate.username) {
+                  <span class="candidates__mail">{{ candidate.email }}</span>
+                }
+              </button>
+            }
+          </div>
+        }
+      </div>
+
+      @if (formState() === 'error') {
+        <div class="pb-error-banner" role="alert">
+          <p>{{ formError() }}</p>
+        </div>
+      }
+
+      @if (formState() === 'success' && created(); as result) {
+        <div class="pb-success-banner" role="status">
+          <p>
+            Organization <strong>"{{ result.name }}"</strong> created with
+            <strong>{{ result.admin_role }}</strong>
+            (<span class="pb-mono">{{ result.admin_email }}</span>).
+          </p>
+          @if (result.setup_token && !setupTokenShown()) {
+            <p class="setup-token">
+              One-time setup token for the new account (shown once):
+              <code class="pb-mono">{{ result.setup_token }}</code>
+              <button
+                type="button"
+                class="pb-btn pb-btn--ghost"
+                (click)="setupTokenShown.set(true)"
+              >
+                Hide token
+              </button>
+            </p>
+          }
+          @if (result.admin_account_created) {
+            <p class="setup-note">The account was created and cannot log in until the token is used.</p>
+          }
+        </div>
+      }
+
+      <div class="form-actions">
+        <button
+          type="button"
+          class="pb-btn pb-btn--primary"
+          [disabled]="!canSubmit()"
+          (click)="submit()"
+        >
+          @if (formState() === 'submitting') {
+            Creating…
+          } @else {
+            Create organization
+          }
+        </button>
+      </div>
+    </form>
+  </section>
+
+  <!-- ── All organizations ────────────────────────────────────────────── -->
+  <section class="panel" aria-labelledby="list-title">
+    <h2 id="list-title" class="panel__title">All organizations</h2>
+
+    @if (organizations().length === 0) {
+      <div class="panel__empty">
+        <p>No organizations exist yet.</p>
+      </div>
+    } @else {
+      <div class="pb-table-scroll">
+        <table class="pb-table orgs-admin">
+          <thead>
+            <tr>
+              <th>Organization</th>
+              <th>Status</th>
+              <th>Created</th>
+              <th class="num">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (org of organizations(); track org.id) {
+              <tr>
+                <td>
+                  <span class="orgs__name">{{ org.name }}</span>
+                </td>
+                <td>
+                  <span
+                    class="statebadge"
+                    [class.statebadge--active]="org.status === 'active'"
+                  >
+                    {{ org.status }}
+                  </span>
+                </td>
+                <td>{{ org.created_at | date: 'mediumDate' }}</td>
+                <td class="num">
+                  <button
+                    type="button"
+                    class="pb-btn pb-btn--ghost pb-btn--sm"
+                    [disabled]="formState() === 'submitting'"
+                    (click)="toggleStatus(org)"
+                  >
+                    {{ org.status === 'active' ? 'Deactivate' : 'Activate' }}
+                  </button>
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+  </section>
+}

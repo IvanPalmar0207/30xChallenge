@@ -14,7 +14,7 @@ from unittest import mock
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError
 from django.test import TestCase
-from rest_framework.authtoken.models import Token
+from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.test import APIClient
 
 from .models import AuditEvent, Organization, OrganizationMembership, OrganizationRole, Vendor
@@ -23,8 +23,9 @@ User = get_user_model()
 
 
 def auth(client, user):
-    token, _ = Token.objects.get_or_create(user=user)
-    client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+    """Authenticate through the real JWT pipeline."""
+    access = RefreshToken.for_user(user).access_token
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
     return client
 
 

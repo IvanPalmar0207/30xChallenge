@@ -5,7 +5,7 @@ import uuid
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
 from django.test import TestCase
-from rest_framework.authtoken.models import Token
+from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.test import APIClient
 
 from .models import Organization, OrganizationMembership, OrganizationRole
@@ -14,9 +14,9 @@ User = get_user_model()
 
 
 def auth(client, user):
-    """Authenticate through the real TokenAuthentication pipeline."""
-    token, _ = Token.objects.get_or_create(user=user)
-    client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+    """Authenticate through the real JWT pipeline."""
+    access = RefreshToken.for_user(user).access_token
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
     return client
 
 
@@ -76,7 +76,7 @@ class OrganizationApiTests(TestCase):
         self.assertEqual(response.status_code, 401)
 
     def test_garbage_token_rejected(self):
-        self.client.credentials(HTTP_AUTHORIZATION="Token not-a-real-token-value")
+        self.client.credentials(HTTP_AUTHORIZATION="Bearer not-a-real-token-value")
         response = self.client.get("/api/v1/organizations/")
         self.assertEqual(response.status_code, 401)
 

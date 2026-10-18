@@ -1,0 +1,75 @@
+<section class="pipeline" aria-label="Invoice processing demo">
+  <div class="pipeline__bar">
+    <p>Example records — static walkthrough, not live data</p>
+    <div class="pipeline__controls">
+      <button
+        type="button"
+        class="pipeline__sound"
+        [attr.aria-pressed]="soundOn()"
+        (click)="toggleSound()"
+      >
+        Sound {{ soundOn() ? 'on' : 'off' }}
+      </button>
+      <button
+        type="button"
+        class="pb-btn pb-btn--primary"
+        (click)="advance()"
+        [disabled]="activeRow().stage === 3 || (activeRow().decision !== 'escalated' && activeRow().stage === 2)"
+      >
+        Advance stage →
+      </button>
+    </div>
+  </div>
+
+  <div class="pipeline__rows" role="list">
+    @for (row of rows(); track row.id) {
+      <div
+        class="pipeline__row"
+        [class.is-active]="row.id === activeId()"
+        role="listitem"
+        (click)="select(row.id)"
+        (keydown.enter)="select(row.id)"
+        tabindex="0"
+      >
+        <div class="pipeline__meta">
+          <span class="pipeline__num">{{ row.number }}</span>
+          <span class="pipeline__vendor">{{ row.vendor }}</span>
+        </div>
+        <div class="pipeline__amount">
+          <span class="pb-mono">{{ row.amount }}</span>
+          <span class="pipeline__vendor"> {{ row.currency }}</span>
+        </div>
+        <span class="pipeline__stage">
+          <span class="pipeline__prog" aria-hidden="true">
+            <span
+              class="pipeline__prog-fill"
+              [style.width.%]="progressOf(row)"
+            ></span>
+          </span>
+          <span class="pipeline__dot" [class.is-live]="row.stage > 0"></span>
+          {{ stageLabel(row.stage) }}
+        </span>
+        <span class="pipeline__decision">
+          @if (row.stage >= 2) {
+            <span
+              class="badge"
+              [class.badge--approved]="row.decision === 'approved'"
+              [class.badge--blocked]="row.decision === 'blocked'"
+              [class.badge--escalated]="row.decision === 'escalated'"
+            >
+              <span class="badge__glyph" aria-hidden="true">{{ glyph(row.decision) }}</span>
+              {{ row.decision }}
+            </span>
+          } @else {
+            <span class="badge badge--empty">pending</span>
+          }
+        </span>
+      </div>
+    }
+  </div>
+
+  <div class="pipeline__foot">
+    <span>{{ activeRow().number }} · {{ activeRow().reason }}</span>
+    <span>A visual demo only — the decision engine runs in the backend and stays authoritative.</span>
+  </div>
+</section>

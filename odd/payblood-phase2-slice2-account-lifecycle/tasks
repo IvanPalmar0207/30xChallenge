@@ -1,0 +1,11 @@
+# PayBlood Phase 2 Slice 2 — tasks mirror
+
+- [x] T1 AuditEvent model + migration
+- [x] T2 Permission + serializers
+- [x] T3 Membership views + URLs
+- [x] T4 Account views + URLs
+- [x] T5 Tests: membership management
+- [x] T6 Tests: account lifecycle + auth/CSRF
+- [x] T7 Tests: audit + transactions
+- [x] T8 Docs: README + contract changelog
+- [x] T9 Validation + report

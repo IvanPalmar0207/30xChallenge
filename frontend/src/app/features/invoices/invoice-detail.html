@@ -1,0 +1,144 @@
+<pb-folio [seq]="2" label="Workspace · Invoice" />
+
+<a routerLink="/app/invoices" class="back">← Invoices</a>
+
+<header class="head">
+  <div>
+    <h1 class="head__title pb-mono">{{ invoice()?.invoice_number ?? 'Invoice' }}</h1>
+    <p class="head__org">Organization: <span class="pb-mono">{{ orgName() }}</span></p>
+  </div>
+</header>
+
+@if (state() === 'loading') {
+  <div class="panel" aria-live="polite" aria-busy="true">
+    <div class="skeleton" aria-hidden="true">
+      <span class="skeleton__line" style="width: 55%"></span>
+      <span class="skeleton__line" style="width: 80%"></span>
+    </div>
+    <p class="panel__hint">Loading invoice…</p>
+  </div>
+} @else if (state() === 'forbidden') {
+  <div class="panel panel--error" role="alert">
+    <h2 class="panel__title">No permission</h2>
+    <p class="panel__body">Your session does not have access to this invoice.</p>
+  </div>
+} @else if (state() === 'notfound') {
+  <div class="panel panel--error" role="alert">
+    <h2 class="panel__title">Invoice not found</h2>
+    <p class="panel__body">
+      This invoice does not exist in the active organization or its id is not
+      valid.
+    </p>
+    <a routerLink="/app/invoices" class="pb-btn pb-btn--ghost">Back to invoices</a>
+  </div>
+} @else if (state() === 'error') {
+  <div class="panel panel--error" role="alert">
+    <h2 class="panel__title">Could not load the invoice</h2>
+    <p class="panel__body">The server did not respond as expected. Try again.</p>
+    <a routerLink="/app/invoices" class="pb-btn pb-btn--ghost">Back to invoices</a>
+  </div>
+} @else {
+  @if (invoice(); as inv) {
+    <div class="detail">
+      <span class="statebadge" [class]="'statebadge--' + inv.status">{{ inv.status }}</span>
+
+      <p
+        class="actions-error"
+        role="alert"
+        [attr.aria-live]="'polite'"
+        [class.is-visible]="actionError()"
+      >
+        {{ actionError() }}
+      </p>
+
+      @if (canEvaluate()) {
+        <div class="actions" aria-label="Policy evaluation actions">
+          <p class="actions__hint">
+            This invoice is received and has not been evaluated. Running the
+            deterministic policy engine decides its next state.
+          </p>
+          <div class="actions__buttons">
+            <button
+              type="button"
+              class="pb-btn pb-btn--primary"
+              (click)="evaluate()"
+              [disabled]="acting()"
+            >
+              @if (acting()) {
+                <pb-icon name="loader" [spin]="true" /> Evaluating…
+              } @else {
+                Evaluate invoice
+              }
+            </button>
+          </div>
+          <p class="actions__note">
+            The engine decides the outcome; this action never approves an
+            invoice by itself.
+          </p>
+        </div>
+      }
+
+      @if (canAct()) {
+        <div class="actions" aria-label="Human approval actions">
+          <p class="actions__hint">This invoice is pending your approval.</p>
+          <div class="actions__buttons">
+            <button
+              type="button"
+              class="pb-btn pb-btn--primary"
+              (click)="approve()"
+              [disabled]="acting()"
+            >
+              @if (acting()) {
+                <pb-icon name="loader" [spin]="true" /> Working…
+              } @else {
+                Approve
+              }
+            </button>
+            <button
+              type="button"
+              class="pb-btn pb-btn--ghost"
+              (click)="reject()"
+              [disabled]="acting()"
+            >
+              Reject
+            </button>
+          </div>
+          <p class="actions__note">
+            Recording a decision here updates the invoice in the backend; it does
+            not execute a payment.
+          </p>
+        </div>
+      }
+
+      <div class="stateexplain" aria-label="State explanation">
+        <p class="stateexplain__text">{{ statusNote(inv.status) }}</p>
+        @if (decisionReason(); as reason) {
+          <p class="stateexplain__reason">Engine reason: {{ reason }}</p>
+        }
+        @if (decisionPolicyVersion(); as version) {
+          <p class="stateexplain__version">Policy version: {{ version }}</p>
+        }
+        @if (evaluationResult(); as result) {
+          <div class="evaluated" role="status">
+            <strong class="evaluated__result pb-mono">
+              {{ result.result }}
+            </strong>
+            <span class="evaluated__detail">{{ result.reason_detail }}</span>
+          </div>
+        }
+      </div>
+
+      <dl class="grid">
+        <div><dt>Vendor</dt><dd>{{ inv.vendor.legal_name }}</dd></div>
+        <div><dt>Tax id</dt><dd class="pb-mono">{{ inv.vendor.tax_id }}</dd></div>
+        <div><dt>Invoice</dt><dd class="pb-mono">{{ inv.invoice_number }}</dd></div>
+        <div><dt>Issue date</dt><dd>{{ inv.issue_date }}</dd></div>
+        <div><dt>Due date</dt><dd>{{ inv.due_date ?? '—' }}</dd></div>
+        <div><dt>Amount</dt><dd class="pb-mono amount">{{ inv.amount }} {{ inv.currency }}</dd></div>
+        <div class="wide"><dt>Description</dt><dd>{{ inv.description || '—' }}</dd></div>
+        <div class="wide"><dt>Created</dt><dd>{{ inv.created_at | date: 'medium' }}</dd></div>
+        <div class="wide"><dt>Updated</dt><dd>{{ inv.updated_at | date: 'medium' }}</dd></div>
+      </dl>
+    </div>
+  }
+}

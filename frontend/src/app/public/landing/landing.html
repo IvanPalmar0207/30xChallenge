@@ -1,0 +1,272 @@
+<header class="mast" [class.mast--scrolled]="scrolled()">
+  <div class="pb-container mast__row">
+    <a routerLink="/" aria-label="PayBlood home" class="mast__brand">
+      <pb-logo />
+    </a>
+
+    <nav class="mast__nav" [class.is-open]="menuOpen()" aria-label="Main">
+      <a href="#problem" (click)="closeMenu()">Why</a>
+      <a href="#demo" (click)="closeMenu()">Try the engine</a>
+      <a href="#coverage" (click)="closeMenu()">Coverage</a>
+      <a routerLink="/app" class="mast__cta" (click)="closeMenu()">Open app</a>
+    </nav>
+
+    <button
+      type="button"
+      class="mast__toggle"
+      [attr.aria-expanded]="menuOpen()"
+      aria-controls="mast-nav"
+      (click)="toggleMenu()"
+    >
+      <span class="mast__toggle-line"></span>
+      <span class="mast__toggle-line"></span>
+      <span class="sr-only">Menu</span>
+    </button>
+  </div>
+</header>
+
+<main>
+  <!-- Hero ---------------------------------------------------------------- -->
+  <section class="hero">
+    <span class="secnum" aria-hidden="true">01</span>
+    <div class="pb-container hero__inner">
+      <div class="hero__copy" pbReveal>
+        <p class="hero__eyebrow">
+          <span class="hero__eyebrow-dot" aria-hidden="true"></span>
+          Deterministic payables
+        </p>
+        <h1 class="hero__title">
+          Invoices decided,<br />
+          <span class="hero__title-accent">not improvised.</span>
+        </h1>
+        <p class="hero__lede">
+          PayBlood runs every supplier invoice through one explicit policy —
+          same rules, same order, same record. Approved, blocked, or escalated:
+          computed, explained, kept.
+        </p>
+        <div class="hero__actions">
+          <a href="#demo" class="pb-btn pb-btn--primary">Try the evaluation</a>
+          <a routerLink="/app" class="pb-btn pb-btn--ghost">Open the app</a>
+        </div>
+
+        <div class="ledger-rule" aria-hidden="true">
+          <span class="ledger-rule__side"><em>Dr</em> decision</span>
+          <span class="ledger-rule__side"><em>Cr</em> record</span>
+        </div>
+        <svg class="sig" viewBox="0 0 220 34" aria-hidden="true">
+          <path d="M6 26 C 32 6, 58 32, 92 16 S 148 30, 178 12 L 210 20" />
+        </svg>
+      </div>
+
+      <div class="hero__stage" pbReveal aria-label="Invoice flow demonstration — example data">
+        <pb-hero-demo />
+      </div>
+    </div>
+  </section>
+
+  <!-- Decision states band (paper) ---------------------------------------- -->
+  <section class="band is-paper" aria-label="Decision states">
+    <div class="pb-container band__grid" role="list">
+      <div class="band__row" role="listitem">
+        <span class="band__chip band__chip--approved" aria-hidden="true">✓</span>
+        <span class="band__term">Approved</span>
+        <span class="band__code">policy_ok</span>
+      </div>
+      <div class="band__row" role="listitem">
+        <span class="band__chip band__chip--blocked" aria-hidden="true">✕</span>
+        <span class="band__term">Blocked</span>
+        <span class="band__code">rule violated</span>
+      </div>
+      <div class="band__row" role="listitem">
+        <span class="band__chip band__chip--escalated" aria-hidden="true">▲</span>
+        <span class="band__term">Escalated</span>
+        <span class="band__code">human review</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Why (paper) --------------------------------------------------------- -->
+  <section id="problem" class="section is-paper">
+    <span class="secnum secnum--right" aria-hidden="true">02</span>
+    <div class="pb-container">
+      <div class="split">
+        <div class="split__aside" pbReveal>
+          <p class="split__folio">The problem</p>
+          <p class="split__lead">Payables drift when no single rule decides them.</p>
+        </div>
+        <div class="split__body" pbReveal>
+          <ul class="split__list">
+            <li>
+              <span class="split__no">01</span>
+              <p><strong>Criteria live in people's heads.</strong> The same invoice gets different answers depending on who reviews it and when.</p>
+            </li>
+            <li>
+              <span class="split__no">02</span>
+              <p><strong>No shared rule, no shared order.</strong> Currency limits, caps and thresholds are applied inconsistently.</p>
+            </li>
+            <li>
+              <span class="split__no">03</span>
+              <p><strong>Decisions leave no trace.</strong> You cannot reconstruct which rule version produced an outcome.</p>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Route (paper, full width) ------------------------------------------ -->
+  <section id="route" class="section is-paper">
+    <span class="secnum" aria-hidden="true">03</span>
+    <div class="pb-container">
+      <div class="fullhead">
+        <p class="split__folio">The route</p>
+        <h2 class="fullhead__title">One invoice, one path, fully explained.</h2>
+        <p class="fullhead__note">
+          Select any stage (Tab + Enter works). Stages marked
+          <em>planned</em> are not implemented yet — PayBlood does not pretend they are.
+        </p>
+      </div>
+      <p class="route-demo-tag">Example data · walkthrough</p>
+      <pb-invoice-cycle />
+    </div>
+  </section>
+
+  <!-- Demo lab (dark, full width) ---------------------------------------- -->
+  <section id="demo" class="section section--lab">
+    <span class="secnum secnum--right" aria-hidden="true">04</span>
+    <div class="pb-container">
+      <div class="fullhead fullhead--center">
+        <p class="split__folio">Try it</p>
+        <h2 class="fullhead__title">Evaluate an invoice yourself — right here.</h2>
+        <p class="fullhead__note">
+          Pick an example, adjust the amount or currency, watch each rule decide,
+          and read the traced outcome. The lab lives entirely in your browser.
+        </p>
+      </div>
+      <pb-invoice-demo />
+    </div>
+  </section>
+
+  <!-- Coverage (dark) ----------------------------------------------------- -->
+  <section id="coverage" class="section">
+    <span class="secnum" aria-hidden="true">05</span>
+    <div class="pb-container">
+      <div class="split">
+        <div class="split__aside" pbReveal>
+          <p class="split__folio">Coverage</p>
+          <p class="split__lead">Where invoices come from — verified, not imagined.</p>
+          <p class="split__note">
+            The 12 currencies below are what the PayBlood API actually accepts
+            for invoice registration. There are no external banking or data
+            integrations yet; the map shows that this phase is still to come.
+          </p>
+        </div>
+        <div class="split__body" pbReveal>
+          <pb-coverage-map />
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Engine (paper, centered) ------------------------------------------- -->
+  <section id="engine" class="section is-paper">
+    <span class="secnum secnum--right" aria-hidden="true">06</span>
+    <div class="pb-container">
+      <div class="fullhead fullhead--center">
+        <p class="split__folio">The engine</p>
+        <h2 class="fullhead__title">A rule that fires first, wins.</h2>
+        <p class="fullhead__note">
+          One policy version is active per organization. Comparisons are strict
+          and no active policy never means approval. Every decision keeps the
+          exact rules snapshot that produced it.
+        </p>
+      </div>
+
+      <div class="engine-grid">
+        <div class="order" role="list" pbReveal>
+          <div class="order__item order__item--blocked">
+            <span class="order__label">Blocked <span aria-hidden="true">✕</span></span>
+            <p>Currency not allowed, or amount exceeds the configured maximum.</p>
+            <code class="order__code">currency_not_allowed · amount_exceeds_max</code>
+          </div>
+          <div class="order__arrow" aria-hidden="true">↓</div>
+          <div class="order__item order__item--escalated">
+            <span class="order__label">Escalated <span aria-hidden="true">▲</span></span>
+            <p>Amount above the escalation threshold, or a required field is missing.</p>
+            <code class="order__code">amount_exceeds_escalation_threshold · due_date_missing</code>
+          </div>
+          <div class="order__arrow" aria-hidden="true">↓</div>
+          <div class="order__item order__item--approved">
+            <span class="order__label">Approved <span aria-hidden="true">✓</span></span>
+            <p>Only when every applied rule passes. No active policy? Escalated, never approved.</p>
+            <code class="order__code">policy_ok · no_active_policy → escalated</code>
+          </div>
+        </div>
+
+        <div pbReveal>
+          <div class="snapshot" aria-label="Example decision snapshot">
+            <p class="snapshot__title">Recorded decision · example</p>
+            <dl class="snapshot__row"><dt>result</dt><dd>approved</dd></dl>
+            <dl class="snapshot__row"><dt>reason_code</dt><dd>policy_ok</dd></dl>
+            <dl class="snapshot__row"><dt>policy_version</dt><dd>3</dd></dl>
+            <dl class="snapshot__row"><dt>rules_snapshot</dt><dd>kept on the decision</dd></dl>
+            <dl class="snapshot__row"><dt>evaluated_by</dt><dd>the engine · actor recorded</dd></dl>
+          </div>
+
+          <div class="controls">
+            <div class="control-row">
+              <span class="control-row__term">Fail closed</span>
+              <span class="control-row__desc">Evaluation, state and audit commit in one transaction — any failure rolls back everything.</span>
+            </div>
+            <div class="control-row">
+              <span class="control-row__term">Isolation</span>
+              <span class="control-row__desc">Organizations only see their own data; foreign resources answer the same 404.</span>
+            </div>
+            <div class="control-row">
+              <span class="control-row__term">Audit</span>
+              <span class="control-row__desc">Append-only events with actor, organization, action and safe metadata.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- AI cost estimator (paper, full width) ------------------------------- -->
+  <section id="ai-cost" class="section">
+    <span class="secnum" aria-hidden="true">07</span>
+    <div class="pb-container">
+      <pb-ai-cost />
+    </div>
+  </section>
+
+  <!-- CTA (dark) ---------------------------------------------------------- -->
+  <section class="section">
+    <div class="pb-container">
+      <div class="cta" pbReveal>
+        <p class="cta__folio">Close the ledger</p>
+        <h2 class="cta__title">Payables that never improvise.</h2>
+        <p class="cta__lede">
+          Configure your policy. Register invoices. Let the engine keep every
+          decision explainable.
+        </p>
+        <a routerLink="/app" class="pb-btn pb-btn--primary">Open the app</a>
+
+        <div class="ledger-rule ledger-rule--center" aria-hidden="true">
+          <span class="ledger-rule__side"><em>Dr</em> decision</span>
+          <span class="ledger-rule__side"><em>Cr</em> record</span>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="pb-container footer__row">
+    <pb-logo />
+    <p class="footer__note">
+      PayBlood is a simulation product: the engine evaluates and records
+      decisions, but no payments are executed. Demo scenarios are example data.
+    </p>
+  </div>
+</footer>

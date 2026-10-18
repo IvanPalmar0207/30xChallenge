@@ -1,0 +1,72 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 625 >>
+stream
+BT
+/F2 16 Tf
+(SYNTHETIC TEST INVOICE - C008) Tj
+/F1 10 Tf
+0 -44 Td
+(This is a synthetic test document - not valid for payment.) Tj
+/F1 10 Tf
+0 -64 Td
+() Tj
+/F1 12 Tf
+0 -84 Td
+(Vendor: Swiss Precision AG) Tj
+/F1 12 Tf
+0 -106 Td
+(Tax ID: che-123.456.789 MKW VAT) Tj
+/F1 12 Tf
+0 -128 Td
+(Invoice No: 2026/INV/0048/CH) Tj
+/F1 12 Tf
+0 -150 Td
+(Issue Date: 2026-05-10) Tj
+/F1 12 Tf
+0 -172 Td
+(Due Date: 2026-06-09) Tj
+/F1 12 Tf
+0 -194 Td
+(Currency: CHF) Tj
+/F1 12 Tf
+0 -216 Td
+(Servicios de precision                     990.00) Tj
+/F1 12 Tf
+0 -238 Td
+() Tj
+/F1 13 Tf
+0 -260 Td
+(Total CHF                              990.00) Tj
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+6 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000251 00000 n 
+0000000927 00000 n 
+0000000997 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R >>
+startxref
+1072
+%%EOF

@@ -12,5 +12,5 @@
 export const environment = {
   production: true,
   /** DRF API base URL for the deployed environment; set per deployment. */
-  apiBaseUrl: "http://localhost:8000/api/v1",
+  apiBaseUrl: "https://payblood-production.up.railway.app/api/v1",
 };

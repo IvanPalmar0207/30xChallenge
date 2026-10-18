@@ -1,0 +1,184 @@
+<pb-folio [seq]="4" label="Workspace · Vendors" />
+
+<header class="pb-page-head">
+  <div class="headerSection" style="display: flex; align-items: center; justify-content: space-between; gap: 1rem;">
+    <div style="flex: 1;">
+      <h1 class="pb-page-title">Vendors</h1>
+      <p class="pb-page-lede">
+        Suppliers of <span class="pb-mono">{{ orgName() }}</span>, served by the
+        backend. Anyone with an active membership can see them; creating,
+        editing and activating/deactivating is reserved for a FINANCE_ADMIN.
+        Tax identifiers are normalized by the API (trimmed and uppercased).
+      </p>
+    </div>
+    @if (state() === 'ready' && isAdmin()) {
+      <button type="button" class="pb-btn pb-btn--primary" (click)="openCreate()">
+        <pb-icon name="check" /> New vendor
+      </button>
+    }
+  </div>
+</header>
+
+@if (state() === 'loading') {
+  <div class="panel" aria-live="polite" aria-busy="true">
+    <div class="skeleton" aria-hidden="true">
+      <span class="skeleton__line" style="width: 100%"></span>
+      <span class="skeleton__line" style="width: 72%"></span>
+    </div>
+    <p class="panel__hint">Loading vendors…</p>
+  </div>
+} @else if (state() === 'noorganization') {
+  <div class="panel panel--empty">
+    <h2 class="panel__title">No active organization</h2>
+    <p class="panel__body">
+      Your session has no active membership, so there is no organization whose
+      vendors could be listed.
+    </p>
+  </div>
+} @else if (state() === 'forbidden') {
+  <div class="panel panel--error" role="alert">
+    <h2 class="panel__title">No permission</h2>
+    <p class="panel__body">
+      Your session does not have access to this organization's vendors.
+    </p>
+  </div>
+} @else if (state() === 'error') {
+  <div class="panel panel--error" role="alert">
+    <h2 class="panel__title">Could not load vendors</h2>
+    <p class="panel__body">
+      The server did not respond as expected. Check the connection and try
+      again.
+    </p>
+    <button type="button" class="pb-btn pb-btn--ghost" (click)="load()">
+      <pb-icon name="arrowRight" /> Retry
+    </button>
+  </div>
+} @else {
+  @if (actionError()) {
+    <div class="panel panel--error" role="alert">
+      <p class="panel__body">{{ actionError() }}</p>
+    </div>
+  }
+
+  @if (formMode()) {
+    <section class="panel vendor-form">
+      <h2 class="panel__title">
+        {{ formMode() === 'create' ? 'New vendor' : 'Edit vendor' }}
+      </h2>
+      <form class="vendor-form__fields" (ngSubmit)="submit()">
+        <label class="pb-field">
+          <span class="pb-field__label">Legal name</span>
+          <input
+            class="pb-input"
+            name="legal_name"
+            [(ngModel)]="legalName"
+            maxlength="200"
+            required
+          />
+        </label>
+        <label class="pb-field">
+          <span class="pb-field__label">Tax identifier</span>
+          <input
+            class="pb-input"
+            name="tax_id"
+            [(ngModel)]="taxId"
+            maxlength="50"
+            placeholder="e.g. ACME-123"
+            required
+          />
+          <span class="pb-field__hint">
+            Normalized by the API: stripped of surrounding whitespace and
+            uppercased.
+          </span>
+        </label>
+
+        @if (formError()) {
+          <p class="pb-error-text" role="alert">{{ formError() }}</p>
+        }
+
+        <div class="vendor-form__actions">
+          <button
+            type="submit"
+            class="pb-btn pb-btn--primary"
+            [disabled]="!canSubmit()"
+          >
+            {{ submitting() ? 'Saving…' : 'Save vendor' }}
+          </button>
+          <button type="button" class="pb-btn pb-btn--ghost" (click)="closeForm()">
+            Cancel
+          </button>
+        </div>
+      </form>
+    </section>
+  }
+
+  @if (vendors().length === 0) {
+    <div class="panel panel--empty">
+      <h2 class="panel__title">No vendors yet</h2>
+      <p class="panel__body">
+        This organization has no registered suppliers yet.
+        {{ isAdmin() ? 'Create the first vendor to start the registry.' : '' }}
+      </p>
+    </div>
+  } @else {
+    <div class="pb-table-scroll">
+    <table class="pb-table vendors">
+      <thead>
+        <tr>
+          <th>Vendor</th>
+          <th>Tax ID</th>
+          <th>Status</th>
+          <th>Added</th>
+          @if (isAdmin()) {
+            <th class="num">Actions</th>
+          }
+        </tr>
+      </thead>
+      <tbody>
+        @for (vendor of vendors(); track vendor.id) {
+          <tr>
+            <td class="vendors__name">{{ vendor.legal_name }}</td>
+            <td class="pb-mono">{{ vendor.tax_id }}</td>
+            <td>
+              <span class="statebadge" [class]="'statebadge--' + vendor.status">
+                {{ statusLabel(vendor.status) }}
+              </span>
+            </td>
+            <td>{{ vendor.created_at | date: 'mediumDate' }}</td>
+            @if (isAdmin()) {
+              <td class="vendors__actions">
+                <button
+                  type="button"
+                  class="pb-btn pb-btn--ghost"
+                  (click)="openEdit(vendor)"
+                >
+                  Edit
+                </button>
+                @if (vendor.status === 'active') {
+                  <button
+                    type="button"
+                    class="pb-btn pb-btn--ghost"
+                    [disabled]="submitting()"
+                    (click)="toggleStatus(vendor)"
+                  >
+                    Deactivate
+                  </button>
+                } @else {
+                  <button
+                    type="button"
+                    class="pb-btn pb-btn--ghost"
+                    [disabled]="submitting()"
+                    (click)="toggleStatus(vendor)"
+                  >
+                    Activate
+                  </button>
+                }
+              </td>
+            }
+          </tr>
+        }
+      </tbody>
+    </table>
+    </div>
+  }
+}

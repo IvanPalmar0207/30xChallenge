@@ -6,7 +6,7 @@ from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
-from rest_framework.authtoken.models import Token
+from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.test import APIClient
 
 from .models import AuditEvent, Organization, OrganizationMembership, OrganizationRole
@@ -15,8 +15,9 @@ User = get_user_model()
 
 
 def auth(client, user):
-    token, _ = Token.objects.get_or_create(user=user)
-    client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+    """Authenticate through the real JWT pipeline."""
+    access = RefreshToken.for_user(user).access_token
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
     return client
 
 
@@ -466,4 +467,24 @@ class MembershipAdminApiTests(TestCase):
             )
         self.assertEqual(response.status_code, 500)
         membership.refresh_from_db()
+        self.assertEqual(membership.role, OrganizationRole.OPERATOR)
+
+    def test_existing_account_keeps_password_and_privileges(self):
+        # Case 21: adding an existing person as a member must never change
+        # their credentials or global privileges.
+        existing = User.objects.create_superuser(username="existing_root", password="keep-secret")
+        auth(self.client, self.admin_a)
+        response = self.client.post(
+            self.url_list(self.org_a.id),
+            {"user": str(existing.id), "role": OrganizationRole.OPERATOR},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        existing.refresh_from_db()
+        self.assertTrue(existing.check_password("keep-secret"))
+        self.assertTrue(existing.is_superuser)
+        self.assertTrue(existing.is_staff)
+        membership = OrganizationMembership.objects.get(
+            user=existing, organization=self.org_a
+        )
         self.assertEqual(membership.role, OrganizationRole.OPERATOR)

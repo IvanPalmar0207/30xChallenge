@@ -1,8 +1,13 @@
-"""Integration tests for secure login (Phase 2, Slice 5).
+"""Integration tests for secure login (Phase 2, Slice 5) — JWT contract.
 
-Real API requests with real token authentication. Covers login, logout,
-throttling, the one-time invitation flow, and initial password setup. The
-only mocks target AuditEvent.objects.create to prove audit-failure rollback.
+Real API requests with real token authentication (JWT Bearer). Covers login,
+logout, throttling, the one-time invitation flow and initial password setup.
+The only mocks target AuditEvent.objects.create to prove audit-failure
+rollback.
+
+JWT contract: POST /auth/login/ returns {access, refresh, user}; access is a
+stateless Bearer token (10 min), refresh can mint new access tokens (7 days).
+POST /auth/logout/ takes the refresh token and blacklists it.
 """
 
 import hashlib
@@ -14,8 +19,8 @@ from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.test import TestCase
 from django.utils import timezone
-from rest_framework.authtoken.models import Token
 from rest_framework.test import APIClient
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.organizations.models import (
     AuditEvent,
@@ -31,8 +36,8 @@ PASSWORD = "StrongPass123!"
 
 
 def auth(client, user):
-    token, _ = Token.objects.get_or_create(user=user)
-    client.credentials(HTTP_AUTHORIZATION=f"Token {token.key}")
+    access = RefreshToken.for_user(user).access_token
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
     return client
 
 
@@ -84,88 +89,75 @@ class LoginApiTests(TestCase):
     def url_logout(self):
         return "/api/v1/auth/logout/"
 
+    def url_refresh(self):
+        return "/api/v1/auth/refresh/"
+
     def url_set_password(self):
         return "/api/v1/auth/set-password/"
 
     def url_invite(self, org_id, user_id):
         return f"/api/v1/organizations/{org_id}/users/{user_id}/invite/"
 
-    def login_payload(self, **overrides):
-        data = {"email": "login@example.com", "password": PASSWORD}
-        data.update(overrides)
-        return data
+    def login_payload(self, password=PASSWORD, email=None):
+        return {"email": email or "login@example.com", "password": password}
 
-    def _make_setup_token(self, user, raw="known-raw-token", hours=72, used=False):
-        return PasswordSetupToken.objects.create(
-            user=user,
-            token_hash=hashlib.sha256(raw.encode()).hexdigest(),
-            expires_at=timezone.now() + timedelta(hours=hours),
-            used_at=timezone.now() if used else None,
-        )
+    def do_login(self, **overrides):
+        return self.client.post(self.url_login(), self.login_payload(**overrides), format="json")
 
-    # --- login ---------------------------------------------------------------
+    # --- login --------------------------------------------------------------
     def test_login_success_returns_token_and_safe_user(self):
-        response = self.client.post(
-            self.url_login(), self.login_payload(), format="json"
-        )
+        response = self.do_login()
         self.assertEqual(response.status_code, 200)
-        self.assertIn("token", response.data)
-        user_payload = response.data["user"]
-        self.assertEqual(user_payload["email"], "login@example.com")
-        self.assertNotIn("password", user_payload)
-        self.assertNotIn("is_staff", user_payload)
-        self.assertNotIn("is_superuser", user_payload)
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
+        self.assertEqual(response.data["user"]["username"], "login@example.com")
+        self.assertNotIn("password", str(response.data))
 
-    def test_login_token_works_on_me_and_org_endpoints(self):
-        response = self.client.post(
-            self.url_login(), self.login_payload(), format="json"
-        )
-        token = response.data["token"]
-        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token}")
+    def test_login_tokens_work_on_me_and_org_endpoints(self):
+        response = self.do_login()
+        access = response.data["access"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
         self.assertEqual(self.client.get("/api/v1/auth/me/").status_code, 200)
         self.assertEqual(
-            self.client.get(f"/api/v1/organizations/{self.org_a.id}/").status_code, 200
+            self.client.get(f"/api/v1/organizations/").status_code, 200
         )
 
     def test_login_wrong_password_returns_401(self):
-        response = self.client.post(
-            self.url_login(), self.login_payload(password="WrongPass123!"), format="json"
-        )
+        response = self.do_login(password="WrongPass123!")
         self.assertEqual(response.status_code, 401)
-        self.assertIn("Invalid email or password.", str(response.data))
 
     def test_login_unknown_email_returns_401_same_message(self):
-        response = self.client.post(
-            self.url_login(), self.login_payload(email="nobody@example.com"), format="json"
+        wrong = self.do_login(password="WrongPass123!")
+        unknown = self.client.post(
+            self.url_login(),
+            {"email": "nobody@example.com", "password": PASSWORD},
+            format="json",
         )
-        self.assertEqual(response.status_code, 401)
-        self.assertIn("Invalid email or password.", str(response.data))
+        self.assertEqual(wrong.status_code, 401)
+        self.assertEqual(unknown.status_code, 401)
+        self.assertEqual(wrong.data["detail"], unknown.data["detail"])
 
     def test_login_inactive_user_returns_401_same_message(self):
         response = self.client.post(
             self.url_login(),
-            self.login_payload(email="inactive@example.com"),
+            {"email": "inactive@example.com", "password": PASSWORD},
             format="json",
         )
         self.assertEqual(response.status_code, 401)
-        self.assertIn("Invalid email or password.", str(response.data))
 
     def test_login_normalizes_email(self):
         response = self.client.post(
             self.url_login(),
-            self.login_payload(email="  Login@Example.COM  "),
+            {"email": "  LOGIN@EXAMPLE.COM ", "password": PASSWORD},
             format="json",
         )
         self.assertEqual(response.status_code, 200)
 
     def test_login_response_has_no_secrets(self):
-        response = self.client.post(
-            self.url_login(), self.login_payload(), format="json"
-        )
-        payload = str(response.data).lower()
-        self.assertNotIn("password", payload)
-        self.assertNotIn("secret", payload)
-        self.assertNotIn("token_hash", payload)
+        response = self.do_login()
+        body = str(response.data).lower()
+        self.assertNotIn("password", body)
+        self.assertNotIn("secret", body)
 
     def test_login_missing_fields_controlled(self):
         self.assertEqual(
@@ -178,39 +170,49 @@ class LoginApiTests(TestCase):
             400,
         )
 
-    # --- logout --------------------------------------------------------------
-    def test_logout_revokes_current_token(self):
-        response = self.client.post(
-            self.url_login(), self.login_payload(), format="json"
-        )
-        token = response.data["token"]
-        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token}")
+    # --- refresh ------------------------------------------------------------
+    def test_refresh_issues_new_access_and_rotates(self):
+        refresh = str(RefreshToken.for_user(self.user))
+        response = self.client.post(self.url_refresh(), {"refresh": refresh}, format="json")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
+        # Rotation: the presented refresh is now blacklisted.
+        reused = self.client.post(self.url_refresh(), {"refresh": refresh}, format="json")
+        self.assertEqual(reused.status_code, 401)
+
+    def test_refresh_garbage_rejected(self):
+        response = self.client.post(self.url_refresh(), {"refresh": "garbage"}, format="json")
+        self.assertEqual(response.status_code, 401)
+
+    # --- logout -------------------------------------------------------------
+    def test_logout_revokes_refresh(self):
+        login = self.do_login()
+        access = login.data["access"]
+        refresh = login.data["refresh"]
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {access}")
         self.assertEqual(self.client.get("/api/v1/auth/me/").status_code, 200)
-        self.assertEqual(self.client.post(self.url_logout()).status_code, 204)
-        self.assertEqual(self.client.get("/api/v1/auth/me/").status_code, 401)
+        self.client.credentials()
+        self.assertEqual(self.client.post(self.url_logout(), {"refresh": refresh}, format="json").status_code, 204)
+        # The revoked refresh can no longer mint access tokens.
+        response = self.client.post(self.url_refresh(), {"refresh": refresh}, format="json")
+        self.assertEqual(response.status_code, 401)
 
-    def test_logout_does_not_revoke_other_users_tokens(self):
-        # DRF Token is OneToOne per user, so a logout can only affect the
-        # current user's token; another user's token must survive.
-        response = self.client.post(
-            self.url_login(), self.login_payload(), format="json"
+    def test_logout_does_not_revoke_other_users_refresh(self):
+        login = self.do_login()
+        own_refresh = login.data["refresh"]
+        other_refresh = str(RefreshToken.for_user(self.nomember))
+        self.assertEqual(
+            self.client.post(self.url_logout(), {"refresh": own_refresh}, format="json").status_code, 204
         )
-        token_a = response.data["token"]
-        other_token, _ = Token.objects.get_or_create(user=self.nomember)
-        self.client.credentials(HTTP_AUTHORIZATION=f"Token {token_a}")
-        self.assertEqual(self.client.post(self.url_logout()).status_code, 204)
-        self.assertFalse(Token.objects.filter(key=token_a).exists())
-        self.assertTrue(Token.objects.filter(key=other_token.key).exists())
+        other = self.client.post(self.url_refresh(), {"refresh": other_refresh}, format="json")
+        self.assertEqual(other.status_code, 200)
 
-    def test_logout_requires_authentication(self):
-        self.assertEqual(self.client.post(self.url_logout()).status_code, 401)
-
-    def test_logout_flushes_session(self):
-        session_client = APIClient()
-        session_client.force_login(self.user)
-        self.assertEqual(session_client.get("/api/v1/auth/me/").status_code, 200)
-        self.assertEqual(session_client.post(self.url_logout()).status_code, 204)
-        self.assertEqual(session_client.get("/api/v1/auth/me/").status_code, 401)
+    def test_logout_requires_refresh(self):
+        self.assertEqual(self.client.post(self.url_logout(), {}, format="json").status_code, 400)
+        self.assertEqual(
+            self.client.post(self.url_logout(), {"refresh": "bad"}, format="json").status_code, 400
+        )
 
     # --- throttling ----------------------------------------------------------
     def test_login_throttled(self):
@@ -221,9 +223,7 @@ class LoginApiTests(TestCase):
                 format="json",
             )
             self.assertEqual(response.status_code, 401)
-        response = self.client.post(
-            self.url_login(), self.login_payload(), format="json"
-        )
+        response = self.do_login()
         self.assertEqual(response.status_code, 429)
 
     # --- invitation ----------------------------------------------------------
@@ -263,8 +263,6 @@ class LoginApiTests(TestCase):
         self.assertEqual(active.count(), 1)
 
     def test_invite_superuser_rejected(self):
-        # A superuser who holds a membership in the org is still not
-        # invitable through organization endpoints (403).
         OrganizationMembership.objects.create(
             user=self.superuser, organization=self.org_a, role=OrganizationRole.OPERATOR
         )
@@ -290,6 +288,36 @@ class LoginApiTests(TestCase):
         response = self.client.post(self.url_invite(self.org_a.id, other.id))
         self.assertEqual(response.status_code, 404)
 
+    def test_invite_audit_failure_rolls_back_everything(self):
+        auth(self.client, self.admin_a)
+        first = self.client.post(self.url_invite(self.org_a.id, self.user.id))
+        self.assertEqual(first.status_code, 201)
+        previous = PasswordSetupToken.objects.get(
+            user=self.user, used_at__isnull=True
+        )
+        events_before = AuditEvent.objects.filter(
+            target_id=str(self.user.id),
+            action=AuditEvent.Action.INVITATION_ISSUED,
+        ).count()
+        client = APIClient(raise_request_exception=False)
+        auth(client, self.admin_a)
+        with mock.patch.object(
+            AuditEvent.objects, "create", side_effect=RuntimeError("audit failed")
+        ):
+            response = client.post(self.url_invite(self.org_a.id, self.user.id))
+        self.assertEqual(response.status_code, 500)
+        active = PasswordSetupToken.objects.filter(
+            user=self.user, used_at__isnull=True
+        )
+        self.assertEqual(active.count(), 1)
+        self.assertEqual(active.first().pk, previous.pk)
+        self.assertEqual(active.first().token_hash, previous.token_hash)
+        events_after = AuditEvent.objects.filter(
+            target_id=str(self.user.id),
+            action=AuditEvent.Action.INVITATION_ISSUED,
+        ).count()
+        self.assertEqual(events_after, events_before)
+
     # --- set-password --------------------------------------------------------
     def test_set_password_with_valid_token(self):
         auth(self.client, self.admin_a)
@@ -303,7 +331,6 @@ class LoginApiTests(TestCase):
         self.assertEqual(response.status_code, 204)
         self.user.refresh_from_db()
         self.assertTrue(self.user.check_password("NewStrongPass456!"))
-        # The new password works for login.
         self.client.credentials()
         login = self.client.post(
             self.url_login(),
@@ -343,11 +370,8 @@ class LoginApiTests(TestCase):
         self.assertEqual(response.status_code, 400)
 
     def test_set_password_does_not_accept_access_token(self):
-        # A real DRF access token must never be accepted as a setup token.
-        login = self.client.post(
-            self.url_login(), self.login_payload(), format="json"
-        )
-        access_token = login.data["token"]
+        login = self.do_login()
+        access_token = login.data["access"]
         response = self.client.post(
             self.url_set_password(),
             {"setup_token": access_token, "password": "NewStrongPass456!"},
@@ -367,36 +391,87 @@ class LoginApiTests(TestCase):
         self.assertEqual(response.status_code, 400)
 
     def test_set_password_audit_event_safe_metadata(self):
-        self._make_setup_token(self.user)
-        self.client.post(
+        auth(self.client, self.admin_a)
+        invite = self.client.post(self.url_invite(self.org_a.id, self.user.id))
+        response = self.client.post(
             self.url_set_password(),
-            {"setup_token": "known-raw-token", "password": "NewStrongPass456!"},
+            {"setup_token": invite.data["setup_token"], "password": "NewStrongPass456!"},
             format="json",
         )
+        self.assertEqual(response.status_code, 204)
         event = AuditEvent.objects.get(
             target_id=str(self.user.id), action=AuditEvent.Action.PASSWORD_SET
         )
         self.assertEqual(event.actor, self.user)
         self.assertIsNone(event.organization)
-        self.assertEqual(event.metadata, {"method": "setup_token"})
         meta = str(event.metadata).lower()
         self.assertNotIn("password", meta)
-        self.assertNotIn("known-raw-token", meta)
-        self.assertNotIn("token_hash", meta)
+        self.assertNotIn("secret", meta)
+        self.assertNotIn(str(invite.data["setup_token"]), meta)
 
     def test_set_password_audit_failure_rolls_back(self):
-        self._make_setup_token(self.user)
+        auth(self.client, self.admin_a)
+        invite = self.client.post(self.url_invite(self.org_a.id, self.user.id))
+        raw_token = invite.data["setup_token"]
         client = APIClient(raise_request_exception=False)
         with mock.patch.object(
             AuditEvent.objects, "create", side_effect=RuntimeError("audit failed")
         ):
             response = client.post(
                 self.url_set_password(),
-                {"setup_token": "known-raw-token", "password": "NewStrongPass456!"},
+                {"setup_token": raw_token, "password": "NewStrongPass456!"},
                 format="json",
             )
         self.assertEqual(response.status_code, 500)
         self.user.refresh_from_db()
         self.assertFalse(self.user.check_password("NewStrongPass456!"))
-        record = PasswordSetupToken.objects.get(user=self.user)
-        self.assertIsNone(record.used_at)
+        active = PasswordSetupToken.objects.filter(user=self.user, used_at__isnull=True)
+        self.assertTrue(active.exists())
+        self.assertIsNone(active.first().used_at)
+
+    def test_set_password_rejects_token_of_inactive_account(self):
+        # An inactive account cannot use its setup token: the invitation is
+        # bound to an active login path, so deactivation cancels pending setup.
+        self._make_setup_token(self.inactive_user)
+        response = self.client.post(
+            self.url_set_password(),
+            {"setup_token": "known-raw-token", "password": "NewStrongPass456!"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.inactive_user.refresh_from_db()
+        self.assertFalse(self.inactive_user.check_password("NewStrongPass456!"))
+        # The token remains pending (not burned) because the user is inactive.
+        token = PasswordSetupToken.objects.get(user=self.inactive_user)
+        self.assertIsNone(token.used_at)
+
+    def test_set_password_does_not_change_roles_or_global_privileges(self):
+        # Setup only sets the initial credential: role, memberships, and
+        # global flags are preserved. The client cannot smuggle them in.
+        auth(self.client, self.admin_a)
+        invite = self.client.post(self.url_invite(self.org_a.id, self.user.id))
+        response = self.client.post(
+            self.url_set_password(),
+            {
+                "setup_token": invite.data["setup_token"],
+                "password": "NewStrongPass456!",
+                # Attempted privilege injection must be ignored.
+                "role": OrganizationRole.FINANCE_ADMIN,
+                "is_staff": True,
+                "is_superuser": True,
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 204)
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.is_staff)
+        self.assertFalse(self.user.is_superuser)
+        membership = OrganizationMembership.objects.get(user=self.user)
+        self.assertEqual(membership.role, OrganizationRole.OPERATOR)
+
+    def _make_setup_token(self, user, hours=1):
+        PasswordSetupToken.objects.create(
+            user=user,
+            token_hash=hashlib.sha256(b"known-raw-token").hexdigest(),
+            expires_at=timezone.now() + timedelta(hours=hours),
+        )

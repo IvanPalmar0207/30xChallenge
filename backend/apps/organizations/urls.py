@@ -2,6 +2,10 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
+    GlobalOrganizationDetailView,
+    GlobalOrganizationListCreateView,
+    GlobalUserListView,
+    InvoiceApprovalView,
     InvoiceDecisionView,
     InvoiceDetailView,
     InvoiceEvaluateView,
@@ -25,6 +29,24 @@ router.register("organizations", OrganizationViewSet, basename="organization")
 
 urlpatterns = [
     path("", include(router.urls)),
+    # Global organization administration (final slice — superuser only).
+    # These routes live OUTSIDE the tenant URL space on purpose: they are
+    # gated by IsGlobalSuperAdmin in the view, never by membership.
+    path(
+        "admin/organizations/",
+        GlobalOrganizationListCreateView.as_view(),
+        name="global-organization-list-create",
+    ),
+    path(
+        "admin/organizations/<uuid:pk>/",
+        GlobalOrganizationDetailView.as_view(),
+        name="global-organization-detail",
+    ),
+    path(
+        "admin/users/",
+        GlobalUserListView.as_view(),
+        name="global-user-list",
+    ),
     # Organization-scoped administration endpoints. The <uuid:> converters
     # reject malformed UUIDs with a plain 404 at routing time.
     path(
@@ -112,5 +134,11 @@ urlpatterns = [
         "organizations/<uuid:organization_pk>/invoices/<uuid:pk>/decision/",
         InvoiceDecisionView.as_view(),
         name="organization-invoice-decision",
+    ),
+    # Human approval (Phase 2). APPROVER only; one decision per invoice.
+    path(
+        "organizations/<uuid:organization_pk>/invoices/<uuid:pk>/approval/",
+        InvoiceApprovalView.as_view(),
+        name="organization-invoice-approval",
     ),
 ]

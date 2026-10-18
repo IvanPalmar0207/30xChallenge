@@ -20,17 +20,27 @@ class MembershipSummarySerializer(serializers.Serializer):
 class MeSerializer(serializers.ModelSerializer):
     """Safe identity profile for /auth/me/.
 
-    Deliberately excludes password, tokens, and staff/superuser flags: global
-    administrative status is a separate concept and must never be presented
-    as organization authority (implementation contract, invariant: approval
-    authority is never implicit).
+    Deliberately excludes password, tokens, and the raw staff/superuser
+    flags. The single derived boolean `is_global_admin` (this session only)
+    only drives UI visibility: every global administration endpoint re-checks
+    superuser status server-side, so it is never a security mechanism
+    (implementation contract invariant: approval authority is never implicit).
     """
 
     memberships = serializers.SerializerMethodField()
+    is_global_admin = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ["id", "username", "email", "first_name", "last_name", "memberships"]
+        fields = [
+            "id",
+            "username",
+            "email",
+            "first_name",
+            "last_name",
+            "memberships",
+            "is_global_admin",
+        ]
 
     def get_memberships(self, obj):
         qs = (
@@ -40,17 +50,27 @@ class MeSerializer(serializers.ModelSerializer):
         )
         return MembershipSummarySerializer(qs, many=True).data
 
+    def get_is_global_admin(self, obj):
+        return bool(obj.is_superuser)
+
 
 class UserPublicSerializer(serializers.ModelSerializer):
     """Safe identity payload for the login response.
 
-    Deliberately excludes password, tokens, and staff/superuser flags; the
-    client calls /auth/me/ for memberships.
+    Deliberately excludes password, tokens, and the raw staff/superuser
+    flags. the derived `is_global_admin` boolean marks this session's global
+    admin status for UI visibility only; the backend re-checks authority on
+    every protected endpoint.
     """
+
+    is_global_admin = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ["id", "username", "email", "first_name", "last_name"]
+        fields = ["id", "username", "email", "first_name", "last_name", "is_global_admin"]
+
+    def get_is_global_admin(self, obj):
+        return bool(obj.is_superuser)
 
 
 class LoginSerializer(serializers.Serializer):

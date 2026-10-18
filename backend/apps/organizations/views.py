@@ -16,6 +16,7 @@ from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
@@ -23,24 +24,34 @@ from rest_framework import generics, status, viewsets
 from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
+from .audit import _audit
 from .models import (
     AuditEvent,
     Invoice,
+    InvoiceApproval,
     Organization,
     OrganizationMembership,
+    OrganizationRole,
     PasswordSetupToken,
     Policy,
     PolicyDecision,
     Vendor,
 )
 from .permissions import (
+    IsActiveOrganizationApprover,
     IsActiveOrganizationFinanceAdmin,
     IsActiveOrganizationInvoiceCreator,
     IsActiveOrganizationMember,
     IsActiveOrganizationMemberInUrl,
+    IsGlobalSuperAdmin,
 )
 from .serializers import (
+    GlobalOrganizationCreateSerializer,
+    GlobalOrganizationUpdateSerializer,
+    GlobalUserCandidateSerializer,
+    InvoiceApprovalSerializer,
     InvoiceCreateSerializer,
     InvoiceSerializer,
     MembershipCreateSerializer,
@@ -96,23 +107,6 @@ class OrganizationViewSet(viewsets.ReadOnlyModelViewSet):
             .distinct()
             .order_by("name")
         )
-
-
-def _audit(actor, organization, action, target_type, target_id, metadata=None):
-    """Create one audit event.
-
-    Any failure propagates so the caller's atomic block rolls back the
-    accompanying change: a change is never reported successful unless its
-    audit record persisted (Slice 2 spec S6).
-    """
-    return AuditEvent.objects.create(
-        actor=actor,
-        organization=organization,
-        action=action,
-        target_type=target_type,
-        target_id=str(target_id),
-        metadata=metadata or {},
-    )
 
 
 class MembershipListCreateView(generics.ListCreateAPIView):
@@ -386,11 +380,17 @@ class UserInviteView(generics.GenericAPIView):
                 "Global superuser accounts cannot be invited through "
                 "organization endpoints."
             )
-        PasswordSetupToken.objects.filter(user=user, used_at__isnull=True).delete()
         raw_token = secrets.token_urlsafe(32)
         token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
         expires_at = timezone.now() + timedelta(hours=SETUP_TOKEN_TTL_HOURS)
         with transaction.atomic():
+            # Invalidation of previous unused tokens, creation of the new
+            # token, and the audit event commit in one transaction: if any
+            # step fails, everything reverts and the previous tokens keep
+            # their state (no partial invitation, no orphan event).
+            PasswordSetupToken.objects.filter(
+                user=user, used_at__isnull=True
+            ).delete()
             PasswordSetupToken.objects.create(
                 user=user, token_hash=token_hash, expires_at=expires_at
             )
@@ -666,7 +666,9 @@ class InvoiceListCreateView(generics.ListCreateAPIView):
         organization = self.get_organization()
         try:
             with transaction.atomic():
-                invoice = serializer.save(organization=organization)
+                invoice = serializer.save(
+                    organization=organization, created_by=self.request.user
+                )
                 _audit(
                     actor=self.request.user,
                     organization=organization,
@@ -896,8 +898,16 @@ class InvoiceEvaluateView(generics.GenericAPIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         rules_snapshot = _policy_snapshot(policy)
+        # An `escalated` engine outcome enters the human approval workflow as
+        # pending_approval; approved/blocked keep their current meaning. The
+        # PolicyDecision still records the engine's real 'escalated' result.
+        final_status = (
+            Invoice.Status.PENDING_APPROVAL
+            if result == PolicyDecision.Result.ESCALATED
+            else result
+        )
         with transaction.atomic():
-            invoice.status = result
+            invoice.status = final_status
             invoice.save(update_fields=["status", "updated_at"])
             decision = PolicyDecision.objects.create(
                 organization=organization,
@@ -951,3 +961,313 @@ class InvoiceDecisionView(generics.RetrieveAPIView):
         return PolicyDecision.objects.filter(
             organization_id=self.kwargs["organization_pk"],
         )
+
+class InvoiceApprovalView(generics.GenericAPIView):
+    """POST /api/v1/organizations/{org}/invoices/{pk}/approval/
+
+    Authorized human decision (APPROVER only) on an invoice the engine left
+    in `pending_approval`. Approves or rejects exactly once; the decision,
+    the invoice status transition and the audit event commit in one
+    transaction (rollback on any failure). Separation of duties: the creator
+    and the policy evaluator cannot be the decision maker. Organizations are
+    isolated: foreign/inexistent invoices answer a uniform 404.
+    """
+
+    permission_classes = [IsAuthenticated, IsActiveOrganizationApprover]
+    serializer_class = InvoiceApprovalSerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        invoice = get_object_or_404(
+            Invoice.objects.select_for_update(),
+            pk=self.kwargs["pk"],
+            organization_id=self.kwargs["organization_pk"],
+        )
+
+        # State eligibility: only pending_approval may be decided.
+        if invoice.status != Invoice.Status.PENDING_APPROVAL:
+            raise ValidationError(
+                "This invoice is not waiting for human approval."
+            )
+
+        # Separation of duties.
+        if invoice.created_by_id is not None and invoice.created_by_id == request.user.id:
+            raise PermissionDenied(
+                "You cannot approve an invoice you created."
+            )
+        decision = (
+            PolicyDecision.objects.filter(invoice=invoice)
+            .order_by("-created_at")
+            .first()
+        )
+        if decision is not None and decision.evaluated_by_id == request.user.id:
+            raise PermissionDenied(
+                "You cannot approve an invoice you evaluated."
+            )
+
+        # Exactly one human decision per invoice (DB unique is the backstop).
+        if InvoiceApproval.objects.filter(invoice=invoice).exists():
+            raise Conflict("This invoice has already been decided.")
+
+        decision_value = serializer.validated_data["decision"]
+        rationale = serializer.validated_data.get("rationale", "")
+        new_status = (
+            Invoice.Status.APPROVED
+            if decision_value == InvoiceApproval.Decision.APPROVED
+            else Invoice.Status.REJECTED
+        )
+
+        try:
+            with transaction.atomic():
+                approval = InvoiceApproval.objects.create(
+                    invoice=invoice,
+                    organization=invoice.organization,
+                    decision=decision_value,
+                    decided_by=request.user,
+                    rationale=rationale,
+                )
+                invoice.status = new_status
+                invoice.save(update_fields=["status", "updated_at"])
+                action = (
+                    AuditEvent.Action.INVOICE_APPROVED
+                    if decision_value == InvoiceApproval.Decision.APPROVED
+                    else AuditEvent.Action.INVOICE_REJECTED
+                )
+                _audit(
+                    actor=request.user,
+                    organization=invoice.organization,
+                    action=action,
+                    target_type="invoice",
+                    target_id=invoice.id,
+                    metadata={
+                        "decision": decision_value,
+                        "approval_id": str(approval.id),
+                    },
+                )
+        except IntegrityError:
+            # A concurrent request created the decision first.
+            raise Conflict("This invoice has already been decided.")
+
+        response_serializer = InvoiceSerializer(
+            invoice, context=self.get_serializer_context()
+        )
+        return Response(response_serializer.data, status=status.HTTP_200_OK)
+
+
+# ---------------------------------------------------------------------------
+# Global organization administration (final slice — superuser only)
+# ---------------------------------------------------------------------------
+
+
+class GlobalOrganizationListCreateView(APIView):
+    """Superuser-only global surface: list organizations or create one with
+    its initial FINANCE_ADMIN.
+
+    List: every organization (no tenant scoping — this is the global
+    administration surface the superuser owns). Create: the organization and
+    its initial FINANCE_ADMIN membership commit atomically with their audit
+    records; any failure rolls everything back so no partial organization is
+    ever left behind.
+
+    The initial administrator is identified by email: it is recreated if the
+    account does not exist (unusable password + one-time setup token, exactly
+    the existing account-lifecycle flow), and reused untouched otherwise
+    (password and privileges preserved). The client can never influence
+    is_superuser, is_staff, global permissions, or the role — the role is
+    fixed server-side to FINANCE_ADMIN.
+    """
+
+    permission_classes = [IsAuthenticated, IsGlobalSuperAdmin]
+
+    def get(self, request):
+        organizations = Organization.objects.all().order_by("name")
+        serializer = OrganizationSerializer(organizations, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        serializer = GlobalOrganizationCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        name = serializer.validated_data["name"]
+        admin_email = serializer.validated_data["admin_email"]
+
+        admin_account_created = False
+        try:
+            with transaction.atomic():
+                created_user = User.objects.filter(username=admin_email).first()
+                if created_user is None:
+                    # Existing account-lifecycle flow: an account is born with
+                    # an unusable password; a one-time setup token lets its
+                    # owner define the credential out-of-band.
+                    created_user = User.objects.create_user(
+                        username=admin_email, email=admin_email, is_active=True
+                    )
+                    admin_account_created = True
+                    _audit(
+                        actor=request.user,
+                        organization=None,
+                        action=AuditEvent.Action.ACCOUNT_CREATED,
+                        target_type="user",
+                        target_id=created_user.id,
+                        metadata={"email": admin_email},
+                    )
+
+                organization = Organization.objects.create(name=name)
+                membership = OrganizationMembership.objects.create(
+                    user=created_user,
+                    organization=organization,
+                    role=OrganizationRole.FINANCE_ADMIN,
+                )
+                _audit(
+                    actor=request.user,
+                    organization=organization,
+                    action=AuditEvent.Action.ORGANIZATION_CREATED,
+                    target_type="organization",
+                    target_id=organization.id,
+                    metadata={"name": name},
+                )
+                _audit(
+                    actor=request.user,
+                    organization=organization,
+                    action=AuditEvent.Action.MEMBERSHIP_CREATED,
+                    target_type="membership",
+                    target_id=membership.id,
+                    metadata={
+                        "user": str(created_user.id),
+                        "role": membership.role,
+                    },
+                )
+
+                setup_token = None
+                expires_at = None
+                if created_user is not None and (
+                    created_user.has_usable_password() is False
+                    and not PasswordSetupToken.objects.filter(
+                        user=created_user, used_at__isnull=True
+                    ).exists()
+                ):
+                    raw_token = secrets.token_urlsafe(32)
+                    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+                    expires_at = timezone.now() + timedelta(hours=SETUP_TOKEN_TTL_HOURS)
+                    PasswordSetupToken.objects.create(
+                        user=created_user,
+                        token_hash=token_hash,
+                        expires_at=expires_at,
+                    )
+                    _audit(
+                        actor=request.user,
+                        organization=organization,
+                        action=AuditEvent.Action.INVITATION_ISSUED,
+                        target_type="user",
+                        target_id=created_user.id,
+                        metadata={"expires_at": expires_at.isoformat()},
+                    )
+                    setup_token = raw_token
+        except IntegrityError:
+            raise ValidationError(
+                "The organization could not be created. The organization name "
+                "must be unique and the admin account valid."
+            )
+
+        payload = {
+            "id": organization.id,
+            "name": organization.name,
+            "status": organization.status,
+            "admin_email": admin_email,
+            "admin_role": membership.role,
+            "membership_id": membership.id,
+            "admin_user_id": str(created_user.id),
+            "admin_account_created": admin_account_created,
+        }
+        if setup_token:
+            payload["setup_token"] = setup_token
+            payload["setup_token_expires_at"] = expires_at.isoformat()
+        return Response(payload, status=status.HTTP_201_CREATED)
+
+
+class GlobalOrganizationDetailView(APIView):
+    """Superuser-only: retrieve an organization's state or update the
+    administrative fields the model allows (name and status).
+
+    Status transitions (active <-> inactive) are audited explicitly; naming
+    changes are audited with their own action. The tenant's owned data
+    (vendors, invoices, policies, memberships) is never writable from the
+    request body.
+    """
+
+    permission_classes = [IsAuthenticated, IsGlobalSuperAdmin]
+
+    def get_object(self, pk):
+        return get_object_or_404(Organization, pk=pk)
+
+    def get(self, request, pk):
+        organization = self.get_object(pk)
+        serializer = OrganizationSerializer(organization)
+        return Response(serializer.data)
+
+    def patch(self, request, pk):
+        organization = self.get_object(pk)
+        serializer = GlobalOrganizationUpdateSerializer(
+            instance=organization,
+            data=request.data,
+            partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+
+        name_before = organization.name
+        status_before = organization.status
+        with transaction.atomic():
+            serializer.save()
+            organization.refresh_from_db()
+
+            if organization.status != status_before:
+                action = (
+                    AuditEvent.Action.ORGANIZATION_ACTIVATED
+                    if organization.status == Organization.Status.ACTIVE
+                    else AuditEvent.Action.ORGANIZATION_DEACTIVATED
+                )
+                _audit(
+                    actor=request.user,
+                    organization=organization,
+                    action=action,
+                    target_type="organization",
+                    target_id=organization.id,
+                    metadata={"status": organization.status},
+                )
+            if organization.name != name_before:
+                _audit(
+                    actor=request.user,
+                    organization=organization,
+                    action=AuditEvent.Action.ORGANIZATION_UPDATED,
+                    target_type="organization",
+                    target_id=organization.id,
+                    metadata={
+                        "name_from": name_before,
+                        "name_to": organization.name,
+                    },
+                )
+
+        return Response(OrganizationSerializer(organization).data)
+
+
+class GlobalUserListView(APIView):
+    """Superuser-only: list candidate users for the initial-admin assignment.
+
+    Exposes only identity fields (id, username, email). An optional `q` query
+    parameter filters by username or email substring. No passwords, hashes,
+    tokens, memberships, or global privilege flags are ever returned.
+    """
+
+    permission_classes = [IsAuthenticated, IsGlobalSuperAdmin]
+
+    def get(self, request):
+        q = (request.query_params.get("q") or "").strip()
+        users = User.objects.all()
+        if q:
+            users = users.filter(
+                Q(username__icontains=q) | Q(email__icontains=q)
+            )
+        users = users.order_by("username")[:50]
+        serializer = GlobalUserCandidateSerializer(users, many=True)
+        return Response(serializer.data)

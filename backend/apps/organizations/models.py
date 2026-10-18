@@ -143,9 +143,11 @@ class Invoice(models.Model):
 
     class Status(models.TextChoices):
         RECEIVED = "received"
+        PENDING_APPROVAL = "pending_approval"
         APPROVED = "approved"
         BLOCKED = "blocked"
         ESCALATED = "escalated"
+        REJECTED = "rejected"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     organization = models.ForeignKey(
@@ -159,6 +161,14 @@ class Invoice(models.Model):
         related_name="invoices",
     )
     invoice_number = models.CharField(max_length=100)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_invoices",
+        help_text="Server-assigned actor who registered the invoice (null for legacy records).",
+    )
     issue_date = models.DateField()
     due_date = models.DateField(null=True, blank=True)
     amount = models.DecimalField(max_digits=14, decimal_places=2)
@@ -284,6 +294,55 @@ class PolicyDecision(models.Model):
         return f"{self.result} ({self.reason_code}) for {self.invoice}"
 
 
+class InvoiceApproval(models.Model):
+    """A single, authorized human decision on an invoice.
+
+    Separate from PolicyDecision: PolicyDecision records the deterministic
+    policy-engine result; InvoiceApproval records whether an APPROVER accepted
+    or rejected an invoice in the human workflow. Exactly one per invoice
+    (database unique constraint), created only after a valid human decision —
+    never at policy evaluation time.
+    """
+
+    class Decision(models.TextChoices):
+        APPROVED = "approved"
+        REJECTED = "rejected"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    invoice = models.ForeignKey(
+        Invoice,
+        on_delete=models.PROTECT,
+        related_name="approval",
+    )
+    organization = models.ForeignKey(
+        Organization,
+        on_delete=models.CASCADE,
+        related_name="invoice_approvals",
+    )
+    decision = models.CharField(max_length=20, choices=Decision.choices)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="approvals_made",
+    )
+    rationale = models.TextField(blank=True, max_length=1000)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["invoice"],
+                name="unique_invoice_human_approval",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.decision} for {self.invoice} by {self.decided_by}"
+
+
+
+
 class AuditEvent(models.Model):
     """Append-only audit record for security-relevant administrative changes.
 
@@ -314,6 +373,12 @@ class AuditEvent(models.Model):
         PASSWORD_SET = "password_set", "Password set"
         INVOICE_EVALUATED = "invoice_evaluated", "Invoice evaluated"
         POLICY_CREATED = "policy_created", "Policy created"
+        INVOICE_APPROVED = "invoice_approved", "Invoice approved"
+        INVOICE_REJECTED = "invoice_rejected", "Invoice rejected"
+        ORGANIZATION_CREATED = "organization_created", "Organization created"
+        ORGANIZATION_UPDATED = "organization_updated", "Organization updated"
+        ORGANIZATION_ACTIVATED = "organization_activated", "Organization activated"
+        ORGANIZATION_DEACTIVATED = "organization_deactivated", "Organization deactivated"
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     actor = models.ForeignKey(
