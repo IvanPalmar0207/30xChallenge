@@ -422,6 +422,28 @@ class InvoiceApiTests(TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertIsNone(response.data["due_date"])
 
+    def test_null_description_is_normalized_and_invoice_can_be_created(self):
+        auth(self.client, self.admin_a)
+        response = self.client.post(
+            self.url_list(self.org_a.id),
+            self.payload(invoice_number="INV-901", description=None),
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["description"], "")
+        invoice = Invoice.objects.get(id=response.data["id"])
+        self.assertEqual(invoice.description, "")
+
+    def test_blank_description_is_accepted(self):
+        auth(self.client, self.admin_a)
+        response = self.client.post(
+            self.url_list(self.org_a.id),
+            self.payload(invoice_number="INV-902", description=""),
+            format="json",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["description"], "")
+
     # --- protected-field injection -------------------------------------------
     def test_protected_fields_cannot_be_injected(self):
         auth(self.client, self.admin_a)

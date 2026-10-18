@@ -334,7 +334,7 @@ class InvoiceCreateSerializer(serializers.Serializer):
     amount = serializers.DecimalField(max_digits=14, decimal_places=2)
     currency = serializers.CharField(max_length=3)
     description = serializers.CharField(
-        required=False, allow_blank=True, max_length=500
+        required=False, allow_blank=True, allow_null=True, max_length=500
     )
 
     def validate_invoice_number(self, value):
@@ -373,6 +373,12 @@ class InvoiceCreateSerializer(serializers.Serializer):
                 raise serializers.ValidationError(
                     "An invoice with this number already exists for this vendor in this organization."
                 )
+        # The frontend represents an empty optional description as null.
+        # Store missing descriptions as an empty string so the invoice can be
+        # created and the active policy can decide whether to escalate it.
+        if attrs.get("description") is None:
+            attrs["description"] = ""
+
         issue_date = attrs.get("issue_date")
         due_date = attrs.get("due_date")
         if issue_date is not None and due_date is not None and due_date < issue_date:
