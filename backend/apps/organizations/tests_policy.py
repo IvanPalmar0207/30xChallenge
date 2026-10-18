@@ -260,13 +260,15 @@ class PolicyEngineTests(TestCase):
         from apps.organizations import views
 
         original_get_object_or_404 = views.get_object_or_404
+        outer_atomic_depth = len(connection.atomic_blocks)
 
         def assert_invoice_lookup_is_atomic(model_or_queryset, *args, **kwargs):
             model = getattr(model_or_queryset, "model", model_or_queryset)
             if model is Invoice:
-                self.assertTrue(
-                    connection.in_atomic_block,
-                    "Invoice select_for_update lookup must run inside transaction.atomic().",
+                self.assertGreater(
+                    len(connection.atomic_blocks),
+                    outer_atomic_depth,
+                    "Invoice select_for_update lookup must run inside a view transaction.atomic().",
                 )
             return original_get_object_or_404(model_or_queryset, *args, **kwargs)
 
