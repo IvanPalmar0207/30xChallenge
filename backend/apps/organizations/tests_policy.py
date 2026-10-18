@@ -13,7 +13,7 @@ import uuid
 from unittest import mock
 
 from django.contrib.auth import get_user_model
-from django.db import IntegrityError
+from django.db import IntegrityError, connection
 from django.test import TestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.test import APIClient
@@ -254,6 +254,32 @@ class PolicyEngineTests(TestCase):
         )
 
     # --- evaluation outcomes ---------------------------------------------------
+    def test_invoice_row_lock_lookup_runs_inside_atomic_transaction(self):
+        # SQLite ignores select_for_update(), so assert the lookup itself is
+        # inside atomic; this catches the PostgreSQL-only autocommit failure.
+        from apps.organizations import views
+
+        original_get_object_or_404 = views.get_object_or_404
+
+        def assert_invoice_lookup_is_atomic(model_or_queryset, *args, **kwargs):
+            model = getattr(model_or_queryset, "model", model_or_queryset)
+            if model is Invoice:
+                self.assertTrue(
+                    connection.in_atomic_block,
+                    "Invoice select_for_update lookup must run inside transaction.atomic().",
+                )
+            return original_get_object_or_404(model_or_queryset, *args, **kwargs)
+
+        auth(self.client, self.admin_a)
+        with mock.patch(
+            "apps.organizations.views.get_object_or_404",
+            side_effect=assert_invoice_lookup_is_atomic,
+        ):
+            response = self.client.post(
+                self.url_evaluate(self.org_a.id, self.inv_received.id)
+            )
+        self.assertEqual(response.status_code, 200, response.data)
+
     def test_evaluate_approved_policy_ok(self):
         self._create_policy(self.org_a)
         auth(self.client, self.admin_a)
