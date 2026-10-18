@@ -875,38 +875,41 @@ class InvoiceEvaluateView(generics.GenericAPIView):
 
     def post(self, request, *args, **kwargs):
         organization = self.get_organization()
-        invoice = get_object_or_404(
-            Invoice.objects.select_for_update(),
-            pk=self.kwargs["pk"],
-            organization_id=organization.id,
-        )
-        if invoice.status != Invoice.Status.RECEIVED:
-            raise Conflict("This invoice has already been evaluated.")
-        policy = (
-            Policy.objects.filter(organization=organization, is_active=True)
-            .order_by("-version")
-            .first()
-        )
-        try:
-            result, reason_code, reason_detail = evaluate_invoice(invoice, policy)
-        except Exception:
-            # Fail safe: never approve on an internal error, never leave a
-            # partial decision or state change, never expose internals.
-            logger.exception("Invoice evaluation failed unexpectedly")
-            return Response(
-                {"detail": "Internal server error."},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-        rules_snapshot = _policy_snapshot(policy)
-        # An `escalated` engine outcome enters the human approval workflow as
-        # pending_approval; approved/blocked keep their current meaning. The
-        # PolicyDecision still records the engine's real 'escalated' result.
-        final_status = (
-            Invoice.Status.PENDING_APPROVAL
-            if result == PolicyDecision.Result.ESCALATED
-            else result
-        )
+        # PostgreSQL requires select_for_update() to be evaluated inside an
+        # active transaction. Keep the row lock, state check, policy read,
+        # evaluation, decision, status transition, and audit event atomic.
         with transaction.atomic():
+            invoice = get_object_or_404(
+                Invoice.objects.select_for_update(),
+                pk=self.kwargs["pk"],
+                organization_id=organization.id,
+            )
+            if invoice.status != Invoice.Status.RECEIVED:
+                raise Conflict("This invoice has already been evaluated.")
+            policy = (
+                Policy.objects.filter(organization=organization, is_active=True)
+                .order_by("-version")
+                .first()
+            )
+            try:
+                result, reason_code, reason_detail = evaluate_invoice(invoice, policy)
+            except Exception:
+                # Fail safe: never approve on an internal error, never leave a
+                # partial decision or state change, never expose internals.
+                logger.exception("Invoice evaluation failed unexpectedly")
+                return Response(
+                    {"detail": "Internal server error."},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+            rules_snapshot = _policy_snapshot(policy)
+            # An `escalated` engine outcome enters the human approval workflow as
+            # pending_approval; approved/blocked keep their current meaning. The
+            # PolicyDecision still records the engine's real 'escalated' result.
+            final_status = (
+                Invoice.Status.PENDING_APPROVAL
+                if result == PolicyDecision.Result.ESCALATED
+                else result
+            )
             invoice.status = final_status
             invoice.save(update_fields=["status", "updated_at"])
             decision = PolicyDecision.objects.create(
@@ -933,16 +936,14 @@ class InvoiceEvaluateView(generics.GenericAPIView):
                     "decision_id": str(decision.id),
                 },
             )
-        return Response(
-            {
+            response_data = {
                 "invoice_id": str(invoice.id),
                 "result": result,
                 "reason_code": reason_code,
                 "reason_detail": reason_detail,
                 "policy_version": policy.version if policy else None,
-            },
-            status=status.HTTP_200_OK,
-        )
+            }
+        return Response(response_data, status=status.HTTP_200_OK)
 
 
 class InvoiceDecisionView(generics.RetrieveAPIView):
